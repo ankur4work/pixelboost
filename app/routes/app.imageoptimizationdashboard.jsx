@@ -474,7 +474,7 @@ export default function ImageOptimizationDashboard() {
 
   return (
     <Page
-      title="Image Optimization Dashboard"
+      title="PixelBoost — Optimization Analytics"
       subtitle="Real-time analytics tracking image optimization across your store"
       primaryAction={{ 
         content: 'Export Report', 

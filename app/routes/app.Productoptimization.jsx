@@ -811,8 +811,8 @@ export default function ProductOptimization() {
 
   return (
     <Page
-      title="Product Image Optimization"
-      subtitle="Optimize product images with real compression and automatic replacement"
+      title="PixelBoost — Image Optimizer"
+      subtitle="Compress and replace product images with real optimization and automatic WebP conversion"
     >
       <Layout>
         {error && (

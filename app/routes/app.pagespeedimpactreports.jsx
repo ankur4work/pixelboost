@@ -541,7 +541,7 @@ export default function PageSpeedImpactReports() {
 
   return (
     <Page
-      title="Page Speed Impact Analysis"
+      title="PixelBoost — Page Speed Reports"
       subtitle="Real-time performance metrics based on actual image optimization results"
       // primaryAction={
       //   selectedPage !== 'all' && pages.length > 0
