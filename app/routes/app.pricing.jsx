@@ -1,19 +1,19 @@
-import { useSubmit, useNavigation } from "react-router";
+import { redirect, useSubmit, useNavigation } from "react-router";
 import { authenticate, PLAN_BASIC } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
 
-  // If already subscribed, go straight to dashboard
-  const { hasActivePayment } = await billing.check({
-    plans: [PLAN_BASIC],
-    isTest: true,
-  });
-
-  if (hasActivePayment) {
-    const { redirect } = await import("react-router");
-    throw redirect("/app");
+  try {
+    const { hasActivePayment } = await billing.check({
+      plans: [PLAN_BASIC],
+      isTest: true,
+    });
+    if (hasActivePayment) throw redirect("/app");
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    // billing.check error = not subscribed, stay on pricing
   }
 
   return null;
@@ -21,6 +21,7 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
+  // billing.request throws a redirect to Shopify billing approval page
   await billing.request({ plan: PLAN_BASIC, isTest: true });
   return null;
 };

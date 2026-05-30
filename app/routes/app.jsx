@@ -13,14 +13,26 @@ export const loader = async ({ request }) => {
 
   const url = new URL(request.url);
 
-  // Skip billing check on the pricing page itself to avoid redirect loop
+  // Skip billing check on pricing page to avoid infinite redirect
   if (!url.pathname.startsWith("/app/pricing")) {
-    const { hasActivePayment } = await billing.check({
-      plans: [PLAN_BASIC],
-      isTest: true,
-    });
+    let hasActivePlan = false;
 
-    if (!hasActivePayment) {
+    try {
+      const result = await billing.check({
+        plans: [PLAN_BASIC],
+        isTest: true,
+      });
+      hasActivePlan = result.hasActivePayment === true;
+    } catch (e) {
+      // If e is already a redirect Response, re-throw it
+      if (e instanceof Response) throw e;
+      // Any other error (plan not configured, API error) = treat as no subscription
+      console.log("[PixelBoost] billing.check error:", e.message);
+      hasActivePlan = false;
+    }
+
+    if (!hasActivePlan) {
+      console.log("[PixelBoost] No active plan, redirecting to pricing");
       throw redirect("/app/pricing");
     }
   }
