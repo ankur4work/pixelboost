@@ -557,10 +557,19 @@ export default function AltTextSuggestions() {
 
   return (
     <Page
-      title="AI Alt Text Suggestions"
-      subtitle="Improve SEO and accessibility with AI-powered recommendations"
+      title="PixelBoost — AI Alt Text Generator"
+      subtitle="Improve SEO and accessibility with AI-powered image descriptions"
     >
       <Layout>
+        <Layout.Section>
+          <div className="pb-page-header">
+            <span className="pb-page-header-icon">✨</span>
+            <div>
+              <p className="pb-page-header-title">AI Alt Text Generator</p>
+              <p className="pb-page-header-sub">Powered by OpenAI GPT-4o-mini &amp; Anthropic Claude</p>
+            </div>
+          </div>
+        </Layout.Section>
         {error && (
           <Layout.Section>
             <Banner title="Error" tone="critical" onDismiss={() => setError(null)}>

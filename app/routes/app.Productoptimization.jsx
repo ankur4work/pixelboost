@@ -815,6 +815,15 @@ export default function ProductOptimization() {
       subtitle="Compress and replace product images with real optimization and automatic WebP conversion"
     >
       <Layout>
+        <Layout.Section>
+          <div className="pb-page-header">
+            <span className="pb-page-header-icon">⚡</span>
+            <div>
+              <p className="pb-page-header-title">Image Optimizer</p>
+              <p className="pb-page-header-sub">WebP conversion &amp; smart compression — up to 70% smaller</p>
+            </div>
+          </div>
+        </Layout.Section>
         {error && (
           <Layout.Section>
             <Banner title="Error" tone="critical" onDismiss={() => setError(null)}>

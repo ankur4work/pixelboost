@@ -555,6 +555,15 @@ export default function PageSpeedImpactReports() {
       // }
     >
       <Layout>
+        <Layout.Section>
+          <div className="pb-page-header">
+            <span className="pb-page-header-icon">📊</span>
+            <div>
+              <p className="pb-page-header-title">Page Speed Reports</p>
+              <p className="pb-page-header-sub">Core Web Vitals tracking — LCP, FID, CLS before &amp; after</p>
+            </div>
+          </div>
+        </Layout.Section>
         {loadError && (
           <Layout.Section>
             <Banner title="Error" tone="critical">
