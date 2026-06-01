@@ -21,8 +21,8 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
   // eslint-disable-next-line no-undef
-  const returnUrl = `${process.env.SHOPIFY_APP_URL}/app`;
-  await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl });
+  const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
+  await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl: `${appUrl}/app` });
   return null;
 };
 

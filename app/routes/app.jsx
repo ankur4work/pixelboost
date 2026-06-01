@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
+import { Outlet, useLoaderData, useRouteError, useNavigate, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -24,14 +24,6 @@ export const loader = async ({ request }) => {
   return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan };
 };
 
-export const action = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-  // eslint-disable-next-line no-undef
-  const returnUrl = `${process.env.SHOPIFY_APP_URL}/app`;
-  await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl });
-  return null;
-};
-
 const features = [
   "AI Alt Text Suggestions",
   "Product Image Optimization",
@@ -41,12 +33,12 @@ const features = [
 ];
 
 function PricingWall() {
-  const submit = useSubmit();
+  const navigate = useNavigate();
   const navigation = useNavigation();
-  const isLoading = navigation.state === "submitting";
+  const isLoading = navigation.state !== "idle";
 
   const handleSubscribe = () => {
-    submit({}, { method: "post", action: "/app" });
+    navigate("/app/subscribe");
   };
 
   return (
