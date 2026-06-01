@@ -30,9 +30,7 @@ const shopify = shopifyApp({
       ],
     },
   },
-  future: {
-    expiringOfflineAccessTokens: true,
-  },
+  future: {},
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
