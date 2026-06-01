@@ -1,4 +1,5 @@
 import { useLoaderData, useSubmit } from "react-router";
+import { redirect } from "react-router";
 import { authenticate, PLAN_BASIC } from "../shopify.server";
 import {
   Page,
@@ -19,13 +20,19 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
 
-  const billingCheck = await billing.require({
-    plans: [PLAN_BASIC],
-    isTest: true,
-    onFailure: () => null,
-  }).catch(() => null);
-
-  const hasActivePlan = !!billingCheck;
+  let hasActivePlan = false;
+  let billingCheck = null;
+  try {
+    billingCheck = await billing.require({
+      plans: [PLAN_BASIC],
+      isTest: true,
+      onFailure: async () => { throw redirect("/app/pricing"); },
+    });
+    hasActivePlan = true;
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    hasActivePlan = false;
+  }
 
   return { hasActivePlan, plan: PLAN_BASIC, amount: 30 };
 };
@@ -40,18 +47,18 @@ export const action = async ({ request }) => {
   }
 
   if (actionType === "cancel") {
-    const billingCheck = await billing.require({
-      plans: [PLAN_BASIC],
-      isTest: true,
-      onFailure: () => null,
-    }).catch(() => null);
-
-    if (billingCheck) {
-      await billing.cancel({
-        subscriptionId: billingCheck.appSubscriptions[0]?.id,
+    try {
+      const billingCheck = await billing.require({
+        plans: [PLAN_BASIC],
         isTest: true,
-        prorate: true,
+        onFailure: async () => { throw redirect("/app/pricing"); },
       });
+      const subscriptionId = billingCheck.appSubscriptions[0]?.id;
+      if (subscriptionId) {
+        await billing.cancel({ subscriptionId, isTest: true, prorate: true });
+      }
+    } catch (e) {
+      if (e instanceof Response) throw e;
     }
   }
 

@@ -1,4 +1,4 @@
-import { redirect, useSubmit, useNavigation } from "react-router";
+import { redirect, useSubmit, useNavigation, useRouteError } from "react-router";
 import { authenticate, PLAN_BASIC } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
@@ -21,8 +21,9 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
-  // billing.request throws a redirect to Shopify billing approval page
-  await billing.request({ plan: PLAN_BASIC, isTest: true });
+  // eslint-disable-next-line no-undef
+  const returnUrl = `${process.env.SHOPIFY_APP_URL}/app`;
+  await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl });
   return null;
 };
 
@@ -264,6 +265,10 @@ const styles = {
     margin: 0,
   },
 };
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
 
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
