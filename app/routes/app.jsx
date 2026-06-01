@@ -3,7 +3,7 @@ import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import { authenticate, PLAN_BASIC } from "../shopify.server";
+import { authenticate, PLAN_BASIC, sessionStorage } from "../shopify.server";
 
 import "@shopify/polaris/build/esm/styles.css";
 
@@ -22,8 +22,9 @@ export const loader = async ({ request }) => {
     hasActivePlan = result.hasActivePayment === true;
   } catch (e) {
     if (e instanceof Response) throw e;
-    // Expired non-expiring token: signal client to break out of iframe for OAuth
+    // Expired non-expiring token: delete bad session then signal client to break out for OAuth
     if (isExpiredToken(e)) {
+      await sessionStorage.deleteSession(session.id);
       // eslint-disable-next-line no-undef
       return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan: false, needsReauth: true, shop: session.shop };
     }
@@ -41,8 +42,11 @@ export const action = async ({ request }) => {
     await billing.request({ plan: PLAN_BASIC, isTest: true });
   } catch (e) {
     if (e instanceof Response) throw e;
-    // Expired token: return signal so client can navigate top frame to OAuth
-    if (isExpiredToken(e)) return { needsReauth: true, shop: session.shop };
+    // Expired token: delete bad session then signal client to navigate top frame to OAuth
+    if (isExpiredToken(e)) {
+      await sessionStorage.deleteSession(session.id);
+      return { needsReauth: true, shop: session.shop };
+    }
     throw e;
   }
   return null;
