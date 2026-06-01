@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData, useRouteError, useNavigate, useNavigation } from "react-router";
+import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -51,12 +51,12 @@ const features = [
 ];
 
 function PricingWall() {
-  const navigate = useNavigate();
+  const submit = useSubmit();
   const navigation = useNavigation();
-  const isLoading = navigation.state !== "idle";
+  const isLoading = navigation.state === "submitting";
 
   const handleSubscribe = () => {
-    navigate("/app/subscribe");
+    submit({}, { method: "post", action: "/app" });
   };
 
   return (
