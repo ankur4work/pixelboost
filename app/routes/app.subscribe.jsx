@@ -10,7 +10,10 @@ export const loader = async ({ request }) => {
     await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl: `${appUrl}/app` });
   } catch (e) {
     if (e instanceof Response) throw e;
-    // auth or billing error — fall through, user stays on pricing wall
+    // Log full Shopify error so we can diagnose 403 cause
+    console.error('[BILLING] status:', e?.response?.code);
+    console.error('[BILLING] body:', JSON.stringify(e?.response?.body, null, 2));
+    console.error('[BILLING] msg:', e?.message);
   }
   return null;
 };
