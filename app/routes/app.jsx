@@ -9,7 +9,8 @@ import "@shopify/polaris/build/esm/styles.css";
 import enTranslations from "@shopify/polaris/locales/en.json";
 
 export const loader = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
+  console.log('[LOADER] session.id:', session.id, '| isOnline:', session.isOnline);
 
   let hasActivePlan = false;
   try {
@@ -25,11 +26,15 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-  // No returnUrl — library auto-generates the correct embedded app URL
-  // (embedded=1&host=...) which Shopify validates billing returnUrls against.
-  // Providing a custom returnUrl caused 403 because it failed Shopify's validation.
-  await billing.request({ plan: PLAN_BASIC, isTest: true });
+  const { billing, session } = await authenticate.admin(request);
+  console.log('[ACTION] session.id:', session.id, '| isOnline:', session.isOnline, '| token:', session.accessToken?.slice(0, 12));
+  try {
+    await billing.request({ plan: PLAN_BASIC, isTest: true });
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    console.error('[ACTION] billing 403 body:', JSON.stringify(e?.response?.body, null, 2));
+    throw e;
+  }
   return null;
 };
 
