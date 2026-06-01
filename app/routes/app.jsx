@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
+import { redirect, Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -8,9 +8,12 @@ import "@shopify/polaris/build/esm/styles.css";
 
 import enTranslations from "@shopify/polaris/locales/en.json";
 
+function isExpiredToken(e) {
+  return e?.response?.networkStatusCode === 403 || String(e?.message).includes('Forbidden');
+}
+
 export const loader = async ({ request }) => {
   const { billing, session } = await authenticate.admin(request);
-  console.log('[LOADER] session.id:', session.id, '| isOnline:', session.isOnline);
 
   let hasActivePlan = false;
   try {
@@ -18,6 +21,7 @@ export const loader = async ({ request }) => {
     hasActivePlan = result.hasActivePayment === true;
   } catch (e) {
     if (e instanceof Response) throw e;
+    if (isExpiredToken(e)) throw redirect(`/auth?shop=${session.shop}`);
     hasActivePlan = false;
   }
 
@@ -27,28 +31,12 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { billing, session } = await authenticate.admin(request);
-  console.log('[ACTION] session.id:', session.id, '| isOnline:', session.isOnline, '| token:', session.accessToken?.slice(0, 12));
-
-  // Raw fetch test — bypass library to see exact Shopify response
-  const rawRes = await fetch(`https://${session.shop}/admin/api/2025-10/graphql.json`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': session.accessToken,
-    },
-    body: JSON.stringify({
-      query: `mutation { appSubscriptionCreate(name: "Basic" returnUrl: "https://pixelboost.onkra.online/app" test: true lineItems: [{ plan: { appRecurringPricingDetails: { price: { amount: 30, currencyCode: USD } interval: EVERY_30_DAYS } } }]) { appSubscription { id } confirmationUrl userErrors { field message } } }`,
-    }),
-  });
-  console.log('[RAW] HTTP status:', rawRes.status);
-  const rawBody = await rawRes.text();
-  console.log('[RAW] body:', rawBody.slice(0, 500));
 
   try {
     await billing.request({ plan: PLAN_BASIC, isTest: true });
   } catch (e) {
     if (e instanceof Response) throw e;
-    console.error('[ACTION] billing 403 body:', JSON.stringify(e?.response?.body, null, 2));
+    if (isExpiredToken(e)) throw redirect(`/auth?shop=${session.shop}`);
     throw e;
   }
   return null;
