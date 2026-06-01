@@ -24,21 +24,12 @@ export const loader = async ({ request }) => {
   return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan };
 };
 
-// Fallback action for old browser sessions that still POST here.
-// New sessions use navigate('/app/subscribe') (GET) instead.
 export const action = async ({ request }) => {
-  try {
-    const { billing } = await authenticate.admin(request);
-    // eslint-disable-next-line no-undef
-    const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
-    await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl: `${appUrl}/app` });
-  } catch (e) {
-    if (e instanceof Response) throw e;
-    console.error('[BILLING] status:', e?.response?.code);
-    console.error('[BILLING] body:', JSON.stringify(e?.response?.body, null, 2));
-    console.error('[BILLING] msg:', e?.message);
-    throw e;
-  }
+  const { billing } = await authenticate.admin(request);
+  // No returnUrl — library auto-generates the correct embedded app URL
+  // (embedded=1&host=...) which Shopify validates billing returnUrls against.
+  // Providing a custom returnUrl caused 403 because it failed Shopify's validation.
+  await billing.request({ plan: PLAN_BASIC, isTest: true });
   return null;
 };
 
