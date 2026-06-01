@@ -1,4 +1,5 @@
-import { redirect, Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
+import { useEffect } from "react";
+import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -21,7 +22,11 @@ export const loader = async ({ request }) => {
     hasActivePlan = result.hasActivePayment === true;
   } catch (e) {
     if (e instanceof Response) throw e;
-    if (isExpiredToken(e)) throw redirect(`/auth?shop=${session.shop}`);
+    // Expired non-expiring token: signal client to break out of iframe for OAuth
+    if (isExpiredToken(e)) {
+      // eslint-disable-next-line no-undef
+      return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan: false, needsReauth: true, shop: session.shop };
+    }
     hasActivePlan = false;
   }
 
@@ -36,7 +41,8 @@ export const action = async ({ request }) => {
     await billing.request({ plan: PLAN_BASIC, isTest: true });
   } catch (e) {
     if (e instanceof Response) throw e;
-    if (isExpiredToken(e)) throw redirect(`/auth?shop=${session.shop}`);
+    // Expired token: return signal so client can navigate top frame to OAuth
+    if (isExpiredToken(e)) return { needsReauth: true, shop: session.shop };
     throw e;
   }
   return null;
@@ -111,7 +117,16 @@ function PricingWall() {
 }
 
 export default function App() {
-  const { apiKey, hasActivePlan } = useLoaderData();
+  const { apiKey, hasActivePlan, needsReauth, shop } = useLoaderData();
+
+  // Expired token: break out of the Shopify iframe so OAuth runs in the top frame
+  useEffect(() => {
+    if (needsReauth && shop) {
+      window.top.location.href = `/auth?shop=${shop}`;
+    }
+  }, [needsReauth, shop]);
+
+  if (needsReauth) return null;
 
   return (
     <ShopifyAppProvider embedded apiKey={apiKey}>
