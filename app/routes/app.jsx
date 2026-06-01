@@ -28,6 +28,22 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { billing, session } = await authenticate.admin(request);
   console.log('[ACTION] session.id:', session.id, '| isOnline:', session.isOnline, '| token:', session.accessToken?.slice(0, 12));
+
+  // Raw fetch test — bypass library to see exact Shopify response
+  const rawRes = await fetch(`https://${session.shop}/admin/api/2025-10/graphql.json`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': session.accessToken,
+    },
+    body: JSON.stringify({
+      query: `mutation { appSubscriptionCreate(name: "Basic" returnUrl: "https://pixelboost.onkra.online/app" test: true lineItems: [{ plan: { appRecurringPricingDetails: { price: { amount: 30, currencyCode: USD } interval: EVERY_30_DAYS } } }]) { appSubscription { id } confirmationUrl userErrors { field message } } }`,
+    }),
+  });
+  console.log('[RAW] HTTP status:', rawRes.status);
+  const rawBody = await rawRes.text();
+  console.log('[RAW] body:', rawBody.slice(0, 500));
+
   try {
     await billing.request({ plan: PLAN_BASIC, isTest: true });
   } catch (e) {
