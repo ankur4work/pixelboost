@@ -3,9 +3,8 @@ import { authenticate, PLAN_BASIC } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-
   try {
+    const { billing } = await authenticate.admin(request);
     const { hasActivePayment } = await billing.check({
       plans: [PLAN_BASIC],
       isTest: true,
@@ -13,7 +12,7 @@ export const loader = async ({ request }) => {
     if (hasActivePayment) throw redirect("/app");
   } catch (e) {
     if (e instanceof Response) throw e;
-    // billing.check error = not subscribed, stay on pricing
+    // auth or billing error — stay on pricing page
   }
 
   return null;

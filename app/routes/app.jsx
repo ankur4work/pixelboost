@@ -24,6 +24,14 @@ export const loader = async ({ request }) => {
   return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan };
 };
 
+export const action = async ({ request }) => {
+  const { billing } = await authenticate.admin(request);
+  // eslint-disable-next-line no-undef
+  const returnUrl = `${process.env.SHOPIFY_APP_URL}/app`;
+  await billing.request({ plan: PLAN_BASIC, isTest: true, returnUrl });
+  return null;
+};
+
 const features = [
   "AI Alt Text Suggestions",
   "Product Image Optimization",
@@ -38,8 +46,7 @@ function PricingWall() {
   const isLoading = navigation.state === "submitting";
 
   const handleSubscribe = () => {
-    // Submit to /app/pricing action (page route) not the layout route
-    submit({}, { method: "post", action: "/app/pricing" });
+    submit({}, { method: "post", action: "/app" });
   };
 
   return (
