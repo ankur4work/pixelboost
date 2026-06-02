@@ -3,7 +3,12 @@ import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import { authenticate, PLAN_BASIC, sessionStorage } from "../shopify.server";
+import { authenticate, sessionStorage } from "../shopify.server";
+import {
+  getBillingState,
+  managedPricingUrl,
+  appBridgeRedirect,
+} from "../billing.server";
 
 import "@shopify/polaris/build/esm/styles.css";
 
@@ -14,15 +19,17 @@ function isExpiredToken(e) {
 }
 
 export const loader = async ({ request }) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   let hasActivePlan = false;
   try {
-    const result = await billing.check({ plans: [PLAN_BASIC], isTest: true });
-    hasActivePlan = result.hasActivePayment === true;
+    // Live subscription state from Shopify is the source of truth for managed
+    // pricing — so subscribe/cancel done on Shopify's page reflect instantly.
+    const state = await getBillingState(admin);
+    hasActivePlan = state.hasActivePlan;
   } catch (e) {
     if (e instanceof Response) throw e;
-    // Expired non-expiring token: delete bad session then signal client to break out for OAuth
+    // Expired token: delete bad session, signal client to break out for OAuth
     if (isExpiredToken(e)) {
       await sessionStorage.deleteSession(session.id);
       // eslint-disable-next-line no-undef
@@ -38,38 +45,11 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
 
-  // This app is permanently flagged as a Managed Pricing app, so the Billing
-  // API (appSubscriptionCreate) is blocked. Redirect the merchant to Shopify's
-  // hosted plan-selection page instead: /charges/<app-handle>/pricing_plans
-  const storeHandle = session.shop.replace(".myshopify.com", "");
-
-  let appHandle = "pixelboost-1"; // fallback (known install handle)
-  try {
-    const resp = await admin.graphql(
-      `#graphql
-      query AppHandle { currentAppInstallation { app { handle } } }`,
-    );
-    const json = await resp.json();
-    const h = json?.data?.currentAppInstallation?.app?.handle;
-    console.log("[BILLING] app handle from API:", h);
-    if (h) appHandle = h;
-  } catch (e) {
-    console.error("[BILLING] handle fetch failed:", e?.message);
-  }
-
-  const pricingUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-  console.log("[BILLING] managed pricing redirect:", pricingUrl);
-
-  // App Bridge intercepts a 401 carrying this header and navigates the TOP
-  // frame to the URL (works cross-origin to admin.shopify.com).
-  throw new Response(null, {
-    status: 401,
-    headers: new Headers({
-      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
-      "Access-Control-Expose-Headers":
-        "X-Shopify-API-Request-Failure-Reauthorize-Url",
-    }),
-  });
+  // Managed pricing: send the merchant to Shopify's hosted plan-selection page.
+  const { appHandle } = await getBillingState(admin);
+  const url = managedPricingUrl(session.shop, appHandle);
+  console.log("[BILLING] managed pricing redirect:", url);
+  throw appBridgeRedirect(url);
 };
 
 const features = [

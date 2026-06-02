@@ -1,6 +1,11 @@
-import { useLoaderData, useSubmit } from "react-router";
-import { redirect } from "react-router";
-import { authenticate, PLAN_BASIC } from "../shopify.server";
+import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-router";
+import { authenticate } from "../shopify.server";
+import {
+  getBillingState,
+  managedPricingUrl,
+  appBridgeRedirect,
+  cancelSubscription,
+} from "../billing.server";
 import {
   Page,
   Layout,
@@ -18,47 +23,44 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
   let hasActivePlan = false;
-  let billingCheck = null;
   try {
-    billingCheck = await billing.require({
-      plans: [PLAN_BASIC],
-      isTest: true,
-      onFailure: async () => { throw redirect("/app/pricing"); },
-    });
-    hasActivePlan = true;
+    const state = await getBillingState(admin);
+    hasActivePlan = state.hasActivePlan;
   } catch (e) {
     if (e instanceof Response) throw e;
     hasActivePlan = false;
   }
 
-  return { hasActivePlan, plan: PLAN_BASIC, amount: 30 };
+  return { hasActivePlan, plan: "Basic", amount: 30 };
 };
 
 export const action = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const actionType = formData.get("actionType");
 
+  const state = await getBillingState(admin);
+  const pricingUrl = managedPricingUrl(session.shop, state.appHandle);
+
+  // Subscribe / change plan → Shopify's hosted managed-pricing page.
   if (actionType === "subscribe") {
-    await billing.request({ plan: PLAN_BASIC, isTest: true });
+    throw appBridgeRedirect(pricingUrl);
   }
 
+  // Cancel: try the in-app cancel mutation first. If managed pricing blocks it,
+  // fall back to the hosted page where the merchant can cancel manually.
   if (actionType === "cancel") {
+    const sub = state.activeSubscription;
+    if (!sub) return { cancelled: true };
     try {
-      const billingCheck = await billing.require({
-        plans: [PLAN_BASIC],
-        isTest: true,
-        onFailure: async () => { throw redirect("/app/pricing"); },
-      });
-      const subscriptionId = billingCheck.appSubscriptions[0]?.id;
-      if (subscriptionId) {
-        await billing.cancel({ subscriptionId, isTest: true, prorate: true });
-      }
+      await cancelSubscription(admin, sub.id);
+      return { cancelled: true };
     } catch (e) {
-      if (e instanceof Response) throw e;
+      console.error("[BILLING] in-app cancel failed, redirecting:", e?.message);
+      throw appBridgeRedirect(pricingUrl);
     }
   }
 
@@ -67,7 +69,10 @@ export const action = async ({ request }) => {
 
 export default function BillingPage() {
   const { hasActivePlan, amount } = useLoaderData();
+  const actionData = useActionData();
+  const navigation = useNavigation();
   const submit = useSubmit();
+  const isBusy = navigation.state !== "idle";
 
   const features = [
     "AI Alt Text Suggestions (OpenAI + Claude)",
@@ -98,6 +103,14 @@ export default function BillingPage() {
       subtitle="Manage your PixelBoost subscription"
     >
       <Layout>
+        {actionData?.cancelled && !hasActivePlan && (
+          <Layout.Section>
+            <Banner title="Subscription cancelled" tone="info">
+              Your plan has been cancelled. Subscribe again any time to unlock features.
+            </Banner>
+          </Layout.Section>
+        )}
+
         {hasActivePlan && (
           <Layout.Section>
             <Banner title="Active subscription" tone="success">
@@ -138,11 +151,11 @@ export default function BillingPage() {
 
               <InlineStack align="end" gap="300">
                 {hasActivePlan ? (
-                  <Button tone="critical" variant="plain" onClick={handleCancel}>
+                  <Button tone="critical" variant="plain" loading={isBusy} onClick={handleCancel}>
                     Cancel subscription
                   </Button>
                 ) : (
-                  <Button variant="primary" size="large" onClick={handleSubscribe}>
+                  <Button variant="primary" size="large" loading={isBusy} onClick={handleSubscribe}>
                     Subscribe — $30/month
                   </Button>
                 )}
@@ -154,8 +167,8 @@ export default function BillingPage() {
         <Layout.Section>
           <Box paddingBlockStart="400">
             <Text variant="bodySm" as="p" tone="subdued">
-              Billed every 30 days through Shopify. Cancel anytime from this page or your Shopify admin.
-              Test mode is active — no real charges will occur during development.
+              Billed every 30 days through Shopify. Subscribe, change, or cancel your plan from this
+              page — all changes are handled securely on Shopify's billing page and reflected here.
             </Text>
           </Box>
         </Layout.Section>

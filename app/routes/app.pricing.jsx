@@ -1,15 +1,17 @@
 import { redirect, useSubmit, useNavigation, useRouteError } from "react-router";
-import { authenticate, PLAN_BASIC } from "../shopify.server";
+import { authenticate } from "../shopify.server";
+import {
+  getBillingState,
+  managedPricingUrl,
+  appBridgeRedirect,
+} from "../billing.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = async ({ request }) => {
   try {
-    const { billing } = await authenticate.admin(request);
-    const { hasActivePayment } = await billing.check({
-      plans: [PLAN_BASIC],
-      isTest: true,
-    });
-    if (hasActivePayment) throw redirect("/app");
+    const { admin } = await authenticate.admin(request);
+    const { hasActivePlan } = await getBillingState(admin);
+    if (hasActivePlan) throw redirect("/app");
   } catch (e) {
     if (e instanceof Response) throw e;
     // auth or billing error — stay on pricing page
@@ -19,9 +21,9 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-  await billing.request({ plan: PLAN_BASIC, isTest: true });
-  return null;
+  const { admin, session } = await authenticate.admin(request);
+  const { appHandle } = await getBillingState(admin);
+  throw appBridgeRedirect(managedPricingUrl(session.shop, appHandle));
 };
 
 const features = [
