@@ -38,15 +38,24 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
 
-  // Managed pricing: redirect merchant to Shopify's plan selection page.
-  // billing.request() (appSubscriptionCreate) is blocked when plans are
-  // defined in the Partner Dashboard — use the admin charges URL instead.
+  // Managed pricing: can't use appSubscriptionCreate (blocked).
+  // Use the library's App Bridge header mechanism — App Bridge intercepts
+  // the 401 + X-Shopify-API-Request-Failure-Reauthorize-Url header and
+  // navigates the top frame to the OAuth install URL which shows the
+  // managed pricing plan selection screen for already-installed apps.
   const shopHandle = session.shop.replace(".myshopify.com", "");
   // eslint-disable-next-line no-undef
   const apiKey = process.env.SHOPIFY_API_KEY;
-  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/charges/${apiKey}/pricing_plan/create`;
+  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/oauth/install?client_id=${apiKey}`;
 
-  return { pricingUrl };
+  throw new Response(null, {
+    status: 401,
+    headers: new Headers({
+      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
+      "Access-Control-Expose-Headers":
+        "X-Shopify-API-Request-Failure-Reauthorize-Url",
+    }),
+  });
 };
 
 const features = [
@@ -63,11 +72,6 @@ function PricingWall() {
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
 
-  useEffect(() => {
-    if (actionData?.pricingUrl) {
-      window.top.location.href = actionData.pricingUrl;
-    }
-  }, [actionData]);
 
   const handleSubscribe = () => {
     submit({}, { method: "post", action: "/app" });
