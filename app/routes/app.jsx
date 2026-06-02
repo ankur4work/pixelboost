@@ -38,24 +38,12 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
 
-  // For managed pricing (plans defined in Partner Dashboard):
-  // billing.request() / appSubscriptionCreate is blocked.
-  // Use the App Bridge reauthorize header so App Bridge navigates the
-  // top frame to Shopify's pricing_plan/create page.
-  // IMPORTANT: the plan must be PUBLISHED (not Draft) in Partner Dashboard.
   const shopHandle = session.shop.replace(".myshopify.com", "");
   // eslint-disable-next-line no-undef
   const apiKey = process.env.SHOPIFY_API_KEY;
   const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/charges/${apiKey}/pricing_plan/create`;
 
-  throw new Response(null, {
-    status: 401,
-    headers: new Headers({
-      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
-      "Access-Control-Expose-Headers":
-        "X-Shopify-API-Request-Failure-Reauthorize-Url",
-    }),
-  });
+  return { pricingUrl };
 };
 
 const features = [
@@ -71,6 +59,22 @@ function PricingWall() {
   const actionData = useActionData();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
+
+  useEffect(() => {
+    if (actionData?.pricingUrl) {
+      // window.shopify.navigate() uses App Bridge's navigation which properly
+      // handles both SPA and server-side Shopify admin pages.
+      // window.top.location.href gets trapped by the admin SPA router.
+      // eslint-disable-next-line no-undef
+      if (window.shopify?.navigate) {
+        // eslint-disable-next-line no-undef
+        window.shopify.navigate(actionData.pricingUrl);
+      } else {
+        // eslint-disable-next-line no-undef
+        window.open(actionData.pricingUrl, "_top");
+      }
+    }
+  }, [actionData]);
 
 
   const handleSubscribe = () => {
