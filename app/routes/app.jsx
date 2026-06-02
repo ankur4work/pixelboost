@@ -36,26 +36,25 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
 
-  // Managed pricing: can't use appSubscriptionCreate (blocked).
-  // Use the library's App Bridge header mechanism — App Bridge intercepts
-  // the 401 + X-Shopify-API-Request-Failure-Reauthorize-Url header and
-  // navigates the top frame to the OAuth install URL which shows the
-  // managed pricing plan selection screen for already-installed apps.
-  const shopHandle = session.shop.replace(".myshopify.com", "");
-  // eslint-disable-next-line no-undef
-  const apiKey = process.env.SHOPIFY_API_KEY;
-  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/oauth/install?client_id=${apiKey}`;
-
-  throw new Response(null, {
-    status: 401,
-    headers: new Headers({
-      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
-      "Access-Control-Expose-Headers":
-        "X-Shopify-API-Request-Failure-Reauthorize-Url",
-    }),
-  });
+  try {
+    // eslint-disable-next-line no-undef
+    const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
+    await billing.request({
+      plan: PLAN_BASIC,
+      isTest: true,
+      returnUrl: `${appUrl}/app`,
+    });
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    if (isExpiredToken(e)) {
+      await sessionStorage.deleteSession(session.id);
+      return { needsReauth: true, shop: session.shop };
+    }
+    throw e;
+  }
+  return null;
 };
 
 const features = [
