@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
+import { Outlet, useLoaderData, useActionData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -47,7 +47,9 @@ export const action = async ({ request }) => {
       await sessionStorage.deleteSession(session.id);
       return { needsReauth: true, shop: session.shop };
     }
-    throw e;
+    // Surface billing config errors (e.g. managed pricing conflict) as a message
+    const msg = e?.errorData?.[0]?.message || e?.message || "Billing error";
+    return { billingError: msg };
   }
   return null;
 };
@@ -62,6 +64,7 @@ const features = [
 
 function PricingWall() {
   const submit = useSubmit();
+  const actionData = useActionData();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
 
@@ -111,6 +114,11 @@ function PricingWall() {
             {isLoading ? "Redirecting to Shopify..." : "Subscribe — $30 / month"}
           </button>
 
+          {actionData?.billingError && (
+            <p style={{ color: "#DC2626", fontSize: 12, textAlign: "center", marginBottom: 8 }}>
+              {actionData.billingError}
+            </p>
+          )}
           <p style={pricingStyles.disclaimer}>
             Secure billing through Shopify · Cancel anytime
           </p>
