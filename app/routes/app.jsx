@@ -36,22 +36,17 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  try {
-    await billing.request({ plan: PLAN_BASIC, isTest: true });
-  } catch (e) {
-    if (e instanceof Response) throw e;
-    // Expired token: delete bad session then signal client to navigate top frame to OAuth
-    if (isExpiredToken(e)) {
-      await sessionStorage.deleteSession(session.id);
-      return { needsReauth: true, shop: session.shop };
-    }
-    // Surface billing config errors (e.g. managed pricing conflict) as a message
-    const msg = e?.errorData?.[0]?.message || e?.message || "Billing error";
-    return { billingError: msg };
-  }
-  return null;
+  // Managed pricing: redirect merchant to Shopify's plan selection page.
+  // billing.request() (appSubscriptionCreate) is blocked when plans are
+  // defined in the Partner Dashboard — use the admin charges URL instead.
+  const shopHandle = session.shop.replace(".myshopify.com", "");
+  // eslint-disable-next-line no-undef
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/charges/${apiKey}/pricing_plan/create`;
+
+  return { pricingUrl };
 };
 
 const features = [
@@ -67,6 +62,12 @@ function PricingWall() {
   const actionData = useActionData();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
+
+  useEffect(() => {
+    if (actionData?.pricingUrl) {
+      window.top.location.href = actionData.pricingUrl;
+    }
+  }, [actionData]);
 
   const handleSubscribe = () => {
     submit({}, { method: "post", action: "/app" });
@@ -114,11 +115,6 @@ function PricingWall() {
             {isLoading ? "Redirecting to Shopify..." : "Subscribe — $30 / month"}
           </button>
 
-          {actionData?.billingError && (
-            <p style={{ color: "#DC2626", fontSize: 12, textAlign: "center", marginBottom: 8 }}>
-              {actionData.billingError}
-            </p>
-          )}
           <p style={pricingStyles.disclaimer}>
             Secure billing through Shopify · Cancel anytime
           </p>
