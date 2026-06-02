@@ -36,25 +36,26 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  try {
-    // eslint-disable-next-line no-undef
-    const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
-    await billing.request({
-      plan: PLAN_BASIC,
-      isTest: true,
-      returnUrl: `${appUrl}/app`,
-    });
-  } catch (e) {
-    if (e instanceof Response) throw e;
-    if (isExpiredToken(e)) {
-      await sessionStorage.deleteSession(session.id);
-      return { needsReauth: true, shop: session.shop };
-    }
-    throw e;
-  }
-  return null;
+  // For managed pricing (plans defined in Partner Dashboard):
+  // billing.request() / appSubscriptionCreate is blocked.
+  // Use the App Bridge reauthorize header so App Bridge navigates the
+  // top frame to Shopify's pricing_plan/create page.
+  // IMPORTANT: the plan must be PUBLISHED (not Draft) in Partner Dashboard.
+  const shopHandle = session.shop.replace(".myshopify.com", "");
+  // eslint-disable-next-line no-undef
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/charges/${apiKey}/pricing_plan/create`;
+
+  throw new Response(null, {
+    status: 401,
+    headers: new Headers({
+      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
+      "Access-Control-Expose-Headers":
+        "X-Shopify-API-Request-Failure-Reauthorize-Url",
+    }),
+  });
 };
 
 const features = [
