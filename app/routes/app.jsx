@@ -36,43 +36,30 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
 
-  const storeHandle = session.shop.replace(".myshopify.com", "");
-
-  // Managed pricing apps (plans defined in the Partner Dashboard) CANNOT use
-  // the Billing API. Instead we redirect the merchant to Shopify's hosted
-  // plan-selection page: /charges/<app-handle>/pricing_plans
-  // Fetch this app's own handle at runtime so the URL is always correct.
-  let appHandle = "pixelboost-1"; // fallback (known install handle)
+  // Billing API: create a TEST subscription so development stores can approve
+  // it. billing.request() throws a redirect (via App Bridge) to Shopify's
+  // billing confirmation page on success.
+  // NOTE: requires NO managed pricing plans in the Partner Dashboard, otherwise
+  // Shopify returns "Managed Pricing Apps cannot use the Billing API".
   try {
-    const resp = await admin.graphql(
-      `#graphql
-      query AppHandle { currentAppInstallation { app { handle } } }`,
-    );
-    const json = await resp.json();
-    const h = json?.data?.currentAppInstallation?.app?.handle;
-    console.log("[BILLING] app handle from API:", h);
-    if (h) appHandle = h;
+    // eslint-disable-next-line no-undef
+    const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
+    await billing.request({
+      plan: PLAN_BASIC,
+      isTest: true,
+      returnUrl: `${appUrl}/app`,
+    });
   } catch (e) {
-    console.error("[BILLING] handle fetch failed:", e?.message);
+    if (e instanceof Response) throw e;
+    if (isExpiredToken(e)) {
+      await sessionStorage.deleteSession(session.id);
+      return { needsReauth: true, shop: session.shop };
+    }
+    throw e;
   }
-
-  const pricingUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-  console.log("[BILLING] managed pricing redirect:", pricingUrl);
-
-  // App Bridge intercepts a 401 carrying this header and navigates the TOP
-  // frame to the URL. This works cross-origin to admin.shopify.com, whereas
-  // window.top.location (cross-origin SecurityError) and window.shopify.navigate
-  // (SPA-only) do not.
-  throw new Response(null, {
-    status: 401,
-    headers: new Headers({
-      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
-      "Access-Control-Expose-Headers":
-        "X-Shopify-API-Request-Failure-Reauthorize-Url",
-    }),
-  });
+  return null;
 };
 
 const features = [
