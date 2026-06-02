@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Outlet, useLoaderData, useActionData, useRouteError, useSubmit, useNavigation } from "react-router";
+import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -36,14 +36,43 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
-  const shopHandle = session.shop.replace(".myshopify.com", "");
-  // eslint-disable-next-line no-undef
-  const apiKey = process.env.SHOPIFY_API_KEY;
-  const pricingUrl = `https://admin.shopify.com/store/${shopHandle}/charges/${apiKey}/pricing_plan/create`;
+  const storeHandle = session.shop.replace(".myshopify.com", "");
 
-  return { pricingUrl };
+  // Managed pricing apps (plans defined in the Partner Dashboard) CANNOT use
+  // the Billing API. Instead we redirect the merchant to Shopify's hosted
+  // plan-selection page: /charges/<app-handle>/pricing_plans
+  // Fetch this app's own handle at runtime so the URL is always correct.
+  let appHandle = "pixelboost-1"; // fallback (known install handle)
+  try {
+    const resp = await admin.graphql(
+      `#graphql
+      query AppHandle { currentAppInstallation { app { handle } } }`,
+    );
+    const json = await resp.json();
+    const h = json?.data?.currentAppInstallation?.app?.handle;
+    console.log("[BILLING] app handle from API:", h);
+    if (h) appHandle = h;
+  } catch (e) {
+    console.error("[BILLING] handle fetch failed:", e?.message);
+  }
+
+  const pricingUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+  console.log("[BILLING] managed pricing redirect:", pricingUrl);
+
+  // App Bridge intercepts a 401 carrying this header and navigates the TOP
+  // frame to the URL. This works cross-origin to admin.shopify.com, whereas
+  // window.top.location (cross-origin SecurityError) and window.shopify.navigate
+  // (SPA-only) do not.
+  throw new Response(null, {
+    status: 401,
+    headers: new Headers({
+      "X-Shopify-API-Request-Failure-Reauthorize-Url": pricingUrl,
+      "Access-Control-Expose-Headers":
+        "X-Shopify-API-Request-Failure-Reauthorize-Url",
+    }),
+  });
 };
 
 const features = [
@@ -56,27 +85,11 @@ const features = [
 
 function PricingWall() {
   const submit = useSubmit();
-  const actionData = useActionData();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
 
-  useEffect(() => {
-    if (actionData?.pricingUrl) {
-      // window.shopify.navigate() uses App Bridge's navigation which properly
-      // handles both SPA and server-side Shopify admin pages.
-      // window.top.location.href gets trapped by the admin SPA router.
-      // eslint-disable-next-line no-undef
-      if (window.shopify?.navigate) {
-        // eslint-disable-next-line no-undef
-        window.shopify.navigate(actionData.pricingUrl);
-      } else {
-        // eslint-disable-next-line no-undef
-        window.open(actionData.pricingUrl, "_top");
-      }
-    }
-  }, [actionData]);
-
-
+  // Posting to the /app action throws a 401 + reauthorize header; App Bridge
+  // intercepts it and navigates the top frame to the managed pricing page.
   const handleSubscribe = () => {
     submit({}, { method: "post", action: "/app" });
   };
