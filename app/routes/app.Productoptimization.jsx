@@ -147,9 +147,13 @@ function calculateOptimizationScore(product) {
   const altTextScore = (imagesWithAlt.length / Math.max(imageCount, 1)) * 30;
   score += altTextScore;
 
-  const optimizedImages = product.metafields.edges.filter(
+  // Count distinct optimized images, capped at the current image count.
+  // (Re-optimizing accumulates image_ metafields from prior runs, which would
+  // otherwise push the count above the number of images, e.g. "4 / 2".)
+  const rawOptimized = product.metafields.edges.filter(
     mf => mf.node.key.startsWith('image_')
   ).length;
+  const optimizedImages = Math.min(rawOptimized, imageCount);
   const optimizationScore = (optimizedImages / Math.max(imageCount, 1)) * 40;
   score += optimizationScore;
 
@@ -158,7 +162,7 @@ function calculateOptimizationScore(product) {
   }
 
   return {
-    score: Math.round(score),
+    score: Math.min(100, Math.round(score)),
     imageCount,
     imagesWithAlt: imagesWithAlt.length,
     optimizedImages,
@@ -216,9 +220,9 @@ export async function loader({ request }) {
           ...optimizationData,
           totalOriginalSizeMB: totalOriginalSize,
           totalOptimizedSizeMB: totalOptimizedSize,
-          sizeSavedMB: totalOriginalSize - totalOptimizedSize,
-          compressionRate: totalOriginalSize > 0 
-            ? Math.round(((totalOriginalSize - totalOptimizedSize) / totalOriginalSize) * 100)
+          sizeSavedMB: Math.max(0, totalOriginalSize - totalOptimizedSize),
+          compressionRate: totalOriginalSize > 0
+            ? Math.max(0, Math.round(((totalOriginalSize - totalOptimizedSize) / totalOriginalSize) * 100))
             : 0,
           featuredImageUrl: product.featuredImage?.url || images[0]?.url,
           needsOptimization: optimizationData.score < 70
@@ -527,6 +531,21 @@ export async function action({ request }) {
 
           // Optimize image with Sharp
           const optimizationData = await optimizeImage(image.url, format);
+
+          // Don't replace if the optimized version isn't actually smaller —
+          // re-encoding an already-tiny image can produce a larger file. Skip
+          // so we never degrade the merchant's image or report negative savings.
+          if (optimizationData.optimizedSizeMB >= originalSizeMB) {
+            optimizationResults.push({
+              imageId: image.id,
+              originalSize: originalSizeMB,
+              optimizedSize: originalSizeMB,
+              compressionRate: 0,
+              skipped: true,
+              success: true,
+            });
+            continue;
+          }
 
           // Generate AI alt text if missing
           let altText = image.altText;
