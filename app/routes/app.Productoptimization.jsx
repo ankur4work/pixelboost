@@ -183,23 +183,22 @@ export async function loader({ request }) {
         let totalOriginalSize = 0;
         let totalOptimizedSize = 0;
 
-        // Get actual sizes - check metafields first, then fetch if needed
-        for (const image of images) {
-          const imageKey = `image_${image.id.split('/').pop()}`;
-          const metafield = product.metafields.edges.find(
-            mf => mf.node.key === imageKey
-          );
-
-          if (metafield) {
-            try {
-              const optData = JSON.parse(metafield.node.value);
-              totalOriginalSize += optData.originalSizeMB || 0;
-              totalOptimizedSize += optData.optimizedSizeMB || 0;
-            } catch (e) {
-              console.error('Error parsing metafield:', e);
-            }
-          } else {
-            // Fetch actual size if not in metafield
+        // Prefer the optimization_summary metafield (accurate totals written by
+        // the optimize action). Fall back to measuring live image sizes only
+        // when the product has never been optimized.
+        const summaryMf = product.metafields.edges.find(
+          (mf) => mf.node.key === 'optimization_summary'
+        );
+        if (summaryMf) {
+          try {
+            const s = JSON.parse(summaryMf.node.value);
+            totalOriginalSize = s.totalOriginalSizeMB || 0;
+            totalOptimizedSize = s.totalOptimizedSizeMB || 0;
+          } catch (e) {
+            console.error('Error parsing optimization summary:', e);
+          }
+        } else {
+          for (const image of images) {
             const actualSize = await getActualImageSize(image.url);
             totalOriginalSize += actualSize;
           }
@@ -807,11 +806,26 @@ export default function ProductOptimization() {
 
   const isSubmitting = navigation.state === 'submitting';
 
+  // Sync local list/filter state with fresh loader data. Without this, the
+  // product cards (and their optimization-progress bars) render from the
+  // initial mount only and never update after optimizing, filtering, or sorting.
+  useEffect(() => {
+    setProducts(initialProducts);
+  }, [initialProducts]);
+
+  useEffect(() => {
+    setFilter(initialFilter);
+  }, [initialFilter]);
+
+  useEffect(() => {
+    setSortBy(initialSortBy);
+  }, [initialSortBy]);
+
   useEffect(() => {
     if (actionData?.success) {
       setSuccessMessage(actionData.message);
       setTimeout(() => setSuccessMessage(null), 5000);
-      
+
       // Reload products to show updated data
       submit({ filter, sortBy }, { method: 'get' });
     } else if (actionData?.error) {
