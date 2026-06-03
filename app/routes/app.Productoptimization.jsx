@@ -202,6 +202,9 @@ export async function loader({ request }) {
             const actualSize = await getActualImageSize(image.url);
             totalOriginalSize += actualSize;
           }
+          // Never optimized → nothing saved yet. Treat optimized size as equal
+          // to original so "Size Saved" shows 0 MB (0%) instead of a false 100%.
+          totalOptimizedSize = totalOriginalSize;
         }
 
         return {
