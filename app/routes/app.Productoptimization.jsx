@@ -880,8 +880,11 @@ export default function ProductOptimization() {
   };
 
   const formatBytes = (mb) => {
-    if (mb >= 1000) return `${(mb / 1000).toFixed(1)} GB`;
-    return `${mb.toFixed(1)} MB`;
+    const v = mb || 0;
+    if (v >= 1000) return `${(v / 1000).toFixed(1)} GB`;
+    if (v >= 1) return `${v.toFixed(1)} MB`;
+    if (v > 0) return `${Math.max(1, Math.round(v * 1024))} KB`;
+    return `0 KB`;
   };
 
   const filterOptions = [
