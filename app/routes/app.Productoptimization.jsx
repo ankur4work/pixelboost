@@ -474,21 +474,23 @@ export async function action({ request }) {
     const productId = formData.get('productId');
     
     try {
-      // Fetch product details
+      // Fetch product media. We query MediaImage (not the legacy `images`
+      // connection) so the node `id` is a MediaImage gid — which is what
+      // productCreateMedia/productDeleteMedia require. Using ProductImage gids
+      // here causes a top-level GraphQL error and aborts the whole optimize.
       const response = await admin.graphql(
         `#graphql
-          query GetProductImages($id: ID!) {
+          query GetProductMedia($id: ID!) {
             product(id: $id) {
               id
               title
-              images(first: 250) {
+              media(first: 250) {
                 edges {
                   node {
-                    id
-                    url
-                    altText
-                    width
-                    height
+                    ... on MediaImage {
+                      id
+                      image { url altText width height }
+                    }
                   }
                 }
               }
@@ -500,10 +502,17 @@ export async function action({ request }) {
 
       const data = await response.json();
       const product = data.data.product;
-      const images = product.images.edges.map((edge, index) => ({
-        ...edge.node,
-        position: index + 1
-      }));
+      const images = (product.media?.edges || [])
+        .map((edge) => edge.node)
+        .filter((node) => node && node.image && node.image.url)
+        .map((node, index) => ({
+          id: node.id,            // MediaImage gid
+          url: node.image.url,
+          altText: node.image.altText,
+          width: node.image.width,
+          height: node.image.height,
+          position: index + 1,
+        }));
 
       const optimizationResults = [];
 
@@ -584,11 +593,20 @@ export async function action({ request }) {
           });
 
         } catch (imageError) {
-          console.error(`Error optimizing image ${image.id}:`, imageError);
+          const detail =
+            imageError?.graphQLErrors || imageError?.body || imageError?.message;
+          console.error(
+            `[OPTIMIZE] image ${image.id} failed:`,
+            typeof detail === "string" ? detail : JSON.stringify(detail),
+          );
           optimizationResults.push({
             imageId: image.id,
             success: false,
-            error: imageError.message
+            error:
+              (Array.isArray(imageError?.graphQLErrors) &&
+                imageError.graphQLErrors[0]?.message) ||
+              imageError?.message ||
+              "Image optimization failed",
           });
         }
       }
@@ -636,6 +654,14 @@ export async function action({ request }) {
         }
       );
 
+      if (images.length === 0) {
+        return { success: false, error: `"${product.title}" has no images to optimize.` };
+      }
+      if (successfulOptimizations.length === 0) {
+        const firstErr = optimizationResults.find((r) => !r.success)?.error || "unknown error";
+        return { success: false, error: `Optimization failed: ${firstErr}` };
+      }
+
       return {
         success: true,
         message: `Successfully optimized ${successfulOptimizations.length} out of ${images.length} images for "${product.title}"`,
@@ -643,10 +669,18 @@ export async function action({ request }) {
       };
 
     } catch (error) {
-      console.error('Error optimizing product:', error);
+      const detail = error?.graphQLErrors || error?.body || error?.message;
+      console.error(
+        "[OPTIMIZE] product failed:",
+        typeof detail === "string" ? detail : JSON.stringify(detail),
+      );
+      const msg =
+        (Array.isArray(error?.graphQLErrors) && error.graphQLErrors[0]?.message) ||
+        error?.message ||
+        "unknown error";
       return {
         success: false,
-        error: 'Failed to optimize product: ' + error.message
+        error: "Failed to optimize product: " + msg,
       };
     }
   }
