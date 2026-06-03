@@ -135,34 +135,41 @@ function getImageFormat(url) {
  * Calculate optimization score for a product
  */
 function calculateOptimizationScore(product) {
-  let score = 0;
   const images = product.images.edges.map(edge => edge.node);
-  
   const imageCount = images.length;
-  if (imageCount > 0) {
-    score += Math.min(imageCount * 2, 20);
-  }
 
   const imagesWithAlt = images.filter(img => img.altText && img.altText.length > 10);
-  const altTextScore = (imagesWithAlt.length / Math.max(imageCount, 1)) * 30;
-  score += altTextScore;
 
-  // Count distinct optimized images, capped at the current image count.
-  // (Re-optimizing accumulates image_ metafields from prior runs, which would
-  // otherwise push the count above the number of images, e.g. "4 / 2".)
-  const rawOptimized = product.metafields.edges.filter(
-    mf => mf.node.key.startsWith('image_')
-  ).length;
-  const optimizedImages = Math.min(rawOptimized, imageCount);
-  const optimizationScore = (optimizedImages / Math.max(imageCount, 1)) * 40;
-  score += optimizationScore;
-
-  if (product.featuredImage && product.featuredImage.altText) {
-    score += 10;
+  // How many images have been optimized. Source of truth is the
+  // optimization_summary metafield (which counts every image processed in the
+  // last run, including ones already optimal). Fall back to counting per-image
+  // metafields. Capped at the current image count.
+  let optimizedImages = 0;
+  const summaryMf = product.metafields.edges.find(
+    mf => mf.node.key === 'optimization_summary'
+  );
+  if (summaryMf) {
+    try {
+      optimizedImages = JSON.parse(summaryMf.node.value).optimizedImages || 0;
+    } catch (e) {
+      optimizedImages = 0;
+    }
   }
+  if (!optimizedImages) {
+    optimizedImages = product.metafields.edges.filter(
+      mf => mf.node.key.startsWith('image_')
+    ).length;
+  }
+  optimizedImages = Math.min(optimizedImages, imageCount);
+
+  // Progress = share of images that are optimized. Reaches 100% once every
+  // image on the product has been optimized.
+  const score = imageCount > 0
+    ? Math.round((optimizedImages / imageCount) * 100)
+    : 0;
 
   return {
-    score: Math.min(100, Math.round(score)),
+    score,
     imageCount,
     imagesWithAlt: imagesWithAlt.length,
     optimizedImages,
