@@ -28,8 +28,16 @@ export const loader = async ({ request }) => {
     const state = await getBillingState(admin);
     hasActivePlan = state.hasActivePlan;
   } catch (e) {
-    if (e instanceof Response) throw e;
-    // Expired token: delete bad session, signal client to break out for OAuth
+    // Propagate redirect Responses (e.g. OAuth flow initiated by the library),
+    // but treat 4xx Responses as an expired/revoked token — trigger re-auth
+    // instead of letting a raw 403 reach the browser and crash React hydration.
+    if (e instanceof Response) {
+      if (e.status >= 300 && e.status < 400) throw e;
+      await sessionStorage.deleteSession(session.id);
+      // eslint-disable-next-line no-undef
+      return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan: false, needsReauth: true, shop: session.shop };
+    }
+    // Expired token via a plain Error object (networkStatusCode === 403 etc.)
     if (isExpiredToken(e)) {
       await sessionStorage.deleteSession(session.id);
       // eslint-disable-next-line no-undef
