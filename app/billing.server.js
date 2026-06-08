@@ -7,6 +7,25 @@
 //   1. read the live subscription state (source of truth) to gate features, and
 //   2. send merchants to the hosted pricing page to subscribe or cancel.
 
+// Central, env-overridable billing config — change price/trial without editing
+// code. Set these in your environment (e.g. Coolify / .env):
+//   BILLING_AMOUNT=60        monthly price shown in the app
+//   BILLING_TRIAL_DAYS=0     free-trial length shown in the app (0 = no trial)
+//   BILLING_PLAN_NAME=Basic  plan name
+//   BILLING_CURRENCY=USD     currency code
+//
+// IMPORTANT: Because this is Managed Pricing, the amount the merchant is
+// actually CHARGED and the real free-trial length come from the plan in the
+// Partner Dashboard — these env values only control what the app DISPLAYS (and
+// the fallback billing config). Keep them in sync with the Partner Dashboard plan.
+export const BILLING_CONFIG = {
+  planName: process.env.BILLING_PLAN_NAME || "Basic",
+  amount: Number(process.env.BILLING_AMOUNT ?? 60),
+  currency: process.env.BILLING_CURRENCY || "USD",
+  intervalDays: 30,
+  trialDays: Number(process.env.BILLING_TRIAL_DAYS ?? 0),
+};
+
 const INSTALLATION_QUERY = `#graphql
   query AppInstallation {
     currentAppInstallation {

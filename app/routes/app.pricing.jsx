@@ -1,9 +1,10 @@
-import { redirect, useSubmit, useNavigation, useRouteError } from "react-router";
+import { redirect, useLoaderData, useSubmit, useNavigation, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import {
   getBillingState,
   managedPricingUrl,
   appBridgeRedirect,
+  BILLING_CONFIG,
 } from "../billing.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
@@ -17,7 +18,11 @@ export const loader = async ({ request }) => {
     // auth or billing error — stay on pricing page
   }
 
-  return null;
+  return {
+    amount: BILLING_CONFIG.amount,
+    currency: BILLING_CONFIG.currency,
+    trialDays: BILLING_CONFIG.trialDays,
+  };
 };
 
 export const action = async ({ request }) => {
@@ -35,6 +40,7 @@ const features = [
 ];
 
 export default function PricingPage() {
+  const { amount, currency, trialDays } = useLoaderData();
   const submit = useSubmit();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
@@ -65,11 +71,13 @@ export default function PricingPage() {
 
           <div style={styles.priceRow}>
             <span style={styles.priceCurrency}>$</span>
-            <span style={styles.priceAmount}>30</span>
+            <span style={styles.priceAmount}>{amount}</span>
             <span style={styles.priceUnit}>&nbsp;/ mo</span>
           </div>
 
-          <p style={styles.billingNote}>Billed every 30 days · USD</p>
+          <p style={styles.billingNote}>
+            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}Billed every 30 days · {currency}
+          </p>
         </div>
 
         {/* White bottom section */}
@@ -97,7 +105,11 @@ export default function PricingPage() {
             onClick={handleSubscribe}
             disabled={isLoading}
           >
-            {isLoading ? "Redirecting to Shopify..." : "Subscribe — $30 / month"}
+            {isLoading
+              ? "Redirecting to Shopify..."
+              : trialDays > 0
+                ? `Start ${trialDays}-day free trial`
+                : `Subscribe — $${amount} / month`}
           </button>
 
           <p style={styles.disclaimer}>

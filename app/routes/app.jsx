@@ -8,6 +8,7 @@ import {
   getBillingState,
   managedPricingUrl,
   appBridgeRedirect,
+  BILLING_CONFIG,
 } from "../billing.server";
 
 import "@shopify/polaris/build/esm/styles.css";
@@ -47,7 +48,15 @@ export const loader = async ({ request }) => {
   }
 
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "", hasActivePlan };
+  return {
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    hasActivePlan,
+    billing: {
+      amount: BILLING_CONFIG.amount,
+      currency: BILLING_CONFIG.currency,
+      trialDays: BILLING_CONFIG.trialDays,
+    },
+  };
 };
 
 export const action = async ({ request }) => {
@@ -68,7 +77,7 @@ const features = [
   "Core Web Vitals (LCP, FID, CLS)",
 ];
 
-function PricingWall() {
+function PricingWall({ amount, currency, trialDays }) {
   const submit = useSubmit();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
@@ -93,10 +102,12 @@ function PricingWall() {
           <span style={pricingStyles.planBadge}>BASIC PLAN</span>
           <div style={pricingStyles.priceRow}>
             <span style={pricingStyles.priceCurrency}>$</span>
-            <span style={pricingStyles.priceAmount}>30</span>
+            <span style={pricingStyles.priceAmount}>{amount}</span>
             <span style={pricingStyles.priceUnit}>&nbsp;/ mo</span>
           </div>
-          <p style={pricingStyles.billingNote}>Billed every 30 days · USD</p>
+          <p style={pricingStyles.billingNote}>
+            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}Billed every 30 days · {currency}
+          </p>
         </div>
 
         <div style={pricingStyles.cardBottom}>
@@ -118,7 +129,11 @@ function PricingWall() {
             onClick={handleSubscribe}
             disabled={isLoading}
           >
-            {isLoading ? "Redirecting to Shopify..." : "Subscribe — $30 / month"}
+            {isLoading
+              ? "Redirecting to Shopify..."
+              : trialDays > 0
+                ? `Start ${trialDays}-day free trial`
+                : `Subscribe — $${amount} / month`}
           </button>
 
           <p style={pricingStyles.disclaimer}>
@@ -131,7 +146,7 @@ function PricingWall() {
 }
 
 export default function App() {
-  const { apiKey, hasActivePlan, needsReauth, shop } = useLoaderData();
+  const { apiKey, hasActivePlan, needsReauth, shop, billing } = useLoaderData();
 
   // Expired token: break out of the Shopify iframe so OAuth runs in the top frame
   useEffect(() => {
@@ -157,7 +172,11 @@ export default function App() {
             <Outlet />
           </>
         ) : (
-          <PricingWall />
+          <PricingWall
+            amount={billing?.amount ?? 60}
+            currency={billing?.currency ?? "USD"}
+            trialDays={billing?.trialDays ?? 0}
+          />
         )}
       </PolarisAppProvider>
     </ShopifyAppProvider>

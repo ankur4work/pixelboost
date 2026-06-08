@@ -5,6 +5,7 @@ import {
   managedPricingUrl,
   appBridgeRedirect,
   cancelSubscription,
+  BILLING_CONFIG,
 } from "../billing.server";
 import {
   Page,
@@ -34,7 +35,12 @@ export const loader = async ({ request }) => {
     hasActivePlan = false;
   }
 
-  return { hasActivePlan, plan: "Basic", amount: 30 };
+  return {
+    hasActivePlan,
+    plan: BILLING_CONFIG.planName,
+    amount: BILLING_CONFIG.amount,
+    trialDays: BILLING_CONFIG.trialDays,
+  };
 };
 
 export const action = async ({ request }) => {
@@ -68,7 +74,7 @@ export const action = async ({ request }) => {
 };
 
 export default function BillingPage() {
-  const { hasActivePlan, amount } = useLoaderData();
+  const { hasActivePlan, plan, amount, trialDays } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -114,7 +120,7 @@ export default function BillingPage() {
         {hasActivePlan && (
           <Layout.Section>
             <Banner title="Active subscription" tone="success">
-              You are on the Basic plan. All features are unlocked.
+              You are on the {plan} plan. All features are unlocked.
             </Banner>
           </Layout.Section>
         )}
@@ -125,7 +131,7 @@ export default function BillingPage() {
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="200">
                   <InlineStack gap="300" blockAlign="center">
-                    <Text variant="headingXl" as="h2">Basic</Text>
+                    <Text variant="headingXl" as="h2">{plan}</Text>
                     {hasActivePlan && <Badge tone="success">Active</Badge>}
                   </InlineStack>
                   <Text variant="bodySm" as="p" tone="subdued">Everything you need to optimize your store</Text>
@@ -156,7 +162,9 @@ export default function BillingPage() {
                   </Button>
                 ) : (
                   <Button variant="primary" size="large" loading={isBusy} onClick={handleSubscribe}>
-                    Subscribe — $30/month
+                    {trialDays > 0
+                      ? `Start ${trialDays}-day free trial — then $${amount}/month`
+                      : `Subscribe — $${amount}/month`}
                   </Button>
                 )}
               </InlineStack>
