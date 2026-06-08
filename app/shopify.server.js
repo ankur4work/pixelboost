@@ -7,8 +7,14 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
+import { BILLING_CONFIG } from "./billing.server";
 
-export const PLAN_BASIC = "Basic";
+export const PLAN_BASIC = BILLING_CONFIG.planName;
+export const PLAN_BASIC_ANNUAL = `${BILLING_CONFIG.planName} Annual`;
+
+// Trial line, only included when BILLING_TRIAL_DAYS > 0.
+const trial =
+  BILLING_CONFIG.trialDays > 0 ? { trialDays: BILLING_CONFIG.trialDays } : {};
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -23,12 +29,28 @@ const shopify = shopifyApp({
     [PLAN_BASIC]: {
       lineItems: [
         {
-          amount: 30,
-          currencyCode: "USD",
+          amount: BILLING_CONFIG.amount,
+          currencyCode: BILLING_CONFIG.currency,
           interval: BillingInterval.Every30Days,
         },
       ],
+      ...trial,
     },
+    // Yearly plan, only registered when BILLING_YEARLY_ENABLED !== "false".
+    ...(BILLING_CONFIG.yearlyEnabled
+      ? {
+          [PLAN_BASIC_ANNUAL]: {
+            lineItems: [
+              {
+                amount: BILLING_CONFIG.amountYearly,
+                currencyCode: BILLING_CONFIG.currency,
+                interval: BillingInterval.Annual,
+              },
+            ],
+            ...trial,
+          },
+        }
+      : {}),
   },
   future: { expiringOfflineAccessTokens: true },
   ...(process.env.SHOP_CUSTOM_DOMAIN

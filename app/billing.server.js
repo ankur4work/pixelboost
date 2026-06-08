@@ -9,10 +9,12 @@
 
 // Central, env-overridable billing config — change price/trial without editing
 // code. Set these in your environment (e.g. Coolify / .env):
-//   BILLING_AMOUNT=60        monthly price shown in the app
-//   BILLING_TRIAL_DAYS=0     free-trial length shown in the app (0 = no trial)
-//   BILLING_PLAN_NAME=Basic  plan name
-//   BILLING_CURRENCY=USD     currency code
+//   BILLING_AMOUNT=60          monthly price shown in the app
+//   BILLING_AMOUNT_YEARLY=600  yearly price shown in the app
+//   BILLING_YEARLY_ENABLED=true  set to "false" to hide the yearly option
+//   BILLING_TRIAL_DAYS=0       free-trial length shown in the app (0 = no trial)
+//   BILLING_PLAN_NAME=Basic    plan name
+//   BILLING_CURRENCY=USD       currency code
 //
 // IMPORTANT: Because this is Managed Pricing, the amount the merchant is
 // actually CHARGED and the real free-trial length come from the plan in the
@@ -20,10 +22,11 @@
 // the fallback billing config). Keep them in sync with the Partner Dashboard plan.
 export const BILLING_CONFIG = {
   planName: process.env.BILLING_PLAN_NAME || "Basic",
-  amount: Number(process.env.BILLING_AMOUNT ?? 60),
   currency: process.env.BILLING_CURRENCY || "USD",
-  intervalDays: 30,
   trialDays: Number(process.env.BILLING_TRIAL_DAYS ?? 0),
+  amount: Number(process.env.BILLING_AMOUNT ?? 60),
+  amountYearly: Number(process.env.BILLING_AMOUNT_YEARLY ?? 600),
+  yearlyEnabled: process.env.BILLING_YEARLY_ENABLED !== "false",
 };
 
 const INSTALLATION_QUERY = `#graphql

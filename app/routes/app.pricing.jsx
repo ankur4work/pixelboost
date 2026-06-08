@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { redirect, useLoaderData, useSubmit, useNavigation, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import {
@@ -20,6 +21,8 @@ export const loader = async ({ request }) => {
 
   return {
     amount: BILLING_CONFIG.amount,
+    amountYearly: BILLING_CONFIG.amountYearly,
+    yearlyEnabled: BILLING_CONFIG.yearlyEnabled,
     currency: BILLING_CONFIG.currency,
     trialDays: BILLING_CONFIG.trialDays,
   };
@@ -40,10 +43,17 @@ const features = [
 ];
 
 export default function PricingPage() {
-  const { amount, currency, trialDays } = useLoaderData();
+  const { amount, amountYearly, yearlyEnabled, currency, trialDays } = useLoaderData();
   const submit = useSubmit();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
+  const [cycle, setCycle] = useState("monthly");
+
+  const isYearly = yearlyEnabled && cycle === "yearly";
+  const price = isYearly ? amountYearly : amount;
+  const unit = isYearly ? "/ yr" : "/ mo";
+  const billingLine = isYearly ? "Billed yearly" : "Billed every 30 days";
+  const monthsFree = amount > 0 ? Math.round((amount * 12 - amountYearly) / amount) : 0;
 
   const handleSubscribe = () => {
     submit({}, { method: "post" });
@@ -67,16 +77,36 @@ export default function PricingPage() {
           {/* Decorative circle */}
           <div style={styles.decorCircle} />
 
-          <span style={styles.planBadge}>BASIC PLAN</span>
+          <div style={styles.topRow}>
+            <span style={styles.planBadge}>BASIC PLAN</span>
+            {yearlyEnabled && (
+              <div style={styles.toggle}>
+                <button
+                  type="button"
+                  onClick={() => setCycle("monthly")}
+                  style={cycle === "monthly" ? styles.toggleBtnActive : styles.toggleBtn}
+                >
+                  Monthly
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCycle("yearly")}
+                  style={cycle === "yearly" ? styles.toggleBtnActive : styles.toggleBtn}
+                >
+                  Yearly{monthsFree > 0 ? ` · ${monthsFree} mo free` : ""}
+                </button>
+              </div>
+            )}
+          </div>
 
           <div style={styles.priceRow}>
             <span style={styles.priceCurrency}>$</span>
-            <span style={styles.priceAmount}>{amount}</span>
-            <span style={styles.priceUnit}>&nbsp;/ mo</span>
+            <span style={styles.priceAmount}>{price}</span>
+            <span style={styles.priceUnit}>&nbsp;{unit}</span>
           </div>
 
           <p style={styles.billingNote}>
-            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}Billed every 30 days · {currency}
+            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}{billingLine} · {currency}
           </p>
         </div>
 
@@ -109,7 +139,9 @@ export default function PricingPage() {
               ? "Redirecting to Shopify..."
               : trialDays > 0
                 ? `Start ${trialDays}-day free trial`
-                : `Subscribe — $${amount} / month`}
+                : isYearly
+                  ? `Subscribe — $${price} / year`
+                  : `Subscribe — $${price} / month`}
           </button>
 
           <p style={styles.disclaimer}>
@@ -177,6 +209,13 @@ const styles = {
     borderRadius: "50%",
     background: "rgba(255,255,255,0.04)",
   },
+  topRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 24,
+  },
   planBadge: {
     display: "inline-block",
     background: "#2C2C2E",
@@ -186,7 +225,34 @@ const styles = {
     letterSpacing: "0.15em",
     padding: "6px 14px",
     borderRadius: 999,
-    marginBottom: 24,
+  },
+  toggle: {
+    display: "flex",
+    background: "#2C2C2E",
+    borderRadius: 999,
+    padding: 3,
+  },
+  toggleBtn: {
+    border: "none",
+    background: "transparent",
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 12,
+    fontWeight: 600,
+    padding: "6px 12px",
+    borderRadius: 999,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  toggleBtnActive: {
+    border: "none",
+    background: "#FFFFFF",
+    color: "#1C1C1E",
+    fontSize: 12,
+    fontWeight: 700,
+    padding: "6px 12px",
+    borderRadius: 999,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
   },
   priceRow: {
     display: "flex",

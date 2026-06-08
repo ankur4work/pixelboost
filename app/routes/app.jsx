@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useLoaderData, useRouteError, useSubmit, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
@@ -53,6 +53,8 @@ export const loader = async ({ request }) => {
     hasActivePlan,
     billing: {
       amount: BILLING_CONFIG.amount,
+      amountYearly: BILLING_CONFIG.amountYearly,
+      yearlyEnabled: BILLING_CONFIG.yearlyEnabled,
       currency: BILLING_CONFIG.currency,
       trialDays: BILLING_CONFIG.trialDays,
     },
@@ -77,13 +79,22 @@ const features = [
   "Core Web Vitals (LCP, FID, CLS)",
 ];
 
-function PricingWall({ amount, currency, trialDays }) {
+function PricingWall({ amount, amountYearly, yearlyEnabled, currency, trialDays }) {
   const submit = useSubmit();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
+  const [cycle, setCycle] = useState("monthly");
+
+  const isYearly = yearlyEnabled && cycle === "yearly";
+  const price = isYearly ? amountYearly : amount;
+  const unit = isYearly ? "/ yr" : "/ mo";
+  const billingLine = isYearly ? "Billed yearly" : "Billed every 30 days";
+  // Months saved vs paying monthly for a year (e.g. 720 → 600 = 2 months free).
+  const monthsFree = amount > 0 ? Math.round((amount * 12 - amountYearly) / amount) : 0;
 
   // Posting to the /app action throws a 401 + reauthorize header; App Bridge
-  // intercepts it and navigates the top frame to the managed pricing page.
+  // intercepts it and navigates the top frame to the managed pricing page,
+  // where the merchant picks the actual monthly/yearly plan.
   const handleSubscribe = () => {
     submit({}, { method: "post", action: "/app" });
   };
@@ -99,14 +110,34 @@ function PricingWall({ amount, currency, trialDays }) {
       <div style={pricingStyles.card}>
         <div style={pricingStyles.cardTop}>
           <div style={pricingStyles.decorCircle} />
-          <span style={pricingStyles.planBadge}>BASIC PLAN</span>
+          <div style={pricingStyles.topRow}>
+            <span style={pricingStyles.planBadge}>BASIC PLAN</span>
+            {yearlyEnabled && (
+              <div style={pricingStyles.toggle}>
+                <button
+                  type="button"
+                  onClick={() => setCycle("monthly")}
+                  style={cycle === "monthly" ? pricingStyles.toggleBtnActive : pricingStyles.toggleBtn}
+                >
+                  Monthly
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCycle("yearly")}
+                  style={cycle === "yearly" ? pricingStyles.toggleBtnActive : pricingStyles.toggleBtn}
+                >
+                  Yearly{monthsFree > 0 ? ` · ${monthsFree} mo free` : ""}
+                </button>
+              </div>
+            )}
+          </div>
           <div style={pricingStyles.priceRow}>
             <span style={pricingStyles.priceCurrency}>$</span>
-            <span style={pricingStyles.priceAmount}>{amount}</span>
-            <span style={pricingStyles.priceUnit}>&nbsp;/ mo</span>
+            <span style={pricingStyles.priceAmount}>{price}</span>
+            <span style={pricingStyles.priceUnit}>&nbsp;{unit}</span>
           </div>
           <p style={pricingStyles.billingNote}>
-            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}Billed every 30 days · {currency}
+            {trialDays > 0 ? `${trialDays}-day free trial · ` : ""}{billingLine} · {currency}
           </p>
         </div>
 
@@ -133,7 +164,9 @@ function PricingWall({ amount, currency, trialDays }) {
               ? "Redirecting to Shopify..."
               : trialDays > 0
                 ? `Start ${trialDays}-day free trial`
-                : `Subscribe — $${amount} / month`}
+                : isYearly
+                  ? `Subscribe — $${price} / year`
+                  : `Subscribe — $${price} / month`}
           </button>
 
           <p style={pricingStyles.disclaimer}>
@@ -174,6 +207,8 @@ export default function App() {
         ) : (
           <PricingWall
             amount={billing?.amount ?? 60}
+            amountYearly={billing?.amountYearly ?? 600}
+            yearlyEnabled={billing?.yearlyEnabled ?? true}
             currency={billing?.currency ?? "USD"}
             trialDays={billing?.trialDays ?? 0}
           />
@@ -226,10 +261,27 @@ const pricingStyles = {
     width: 130, height: 130, borderRadius: "50%",
     background: "rgba(255,255,255,0.04)",
   },
+  topRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    gap: 8, marginBottom: 10,
+  },
   planBadge: {
     display: "inline-block", background: "#2C2C2E", color: "#D1D5DB",
     fontSize: 10, fontWeight: 700, letterSpacing: "0.15em",
-    padding: "4px 10px", borderRadius: 999, marginBottom: 10,
+    padding: "4px 10px", borderRadius: 999,
+  },
+  toggle: {
+    display: "flex", background: "#2C2C2E", borderRadius: 999, padding: 2,
+  },
+  toggleBtn: {
+    border: "none", background: "transparent", color: "rgba(255,255,255,0.55)",
+    fontSize: 10, fontWeight: 600, padding: "4px 10px", borderRadius: 999,
+    cursor: "pointer", whiteSpace: "nowrap",
+  },
+  toggleBtnActive: {
+    border: "none", background: "#FFFFFF", color: "#1C1C1E",
+    fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 999,
+    cursor: "pointer", whiteSpace: "nowrap",
   },
   priceRow: { display: "flex", alignItems: "flex-start", marginBottom: 4 },
   priceCurrency: { fontSize: 18, fontWeight: 700, color: "rgba(255,255,255,0.7)", marginTop: 7 },

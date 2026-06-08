@@ -39,6 +39,8 @@ export const loader = async ({ request }) => {
     hasActivePlan,
     plan: BILLING_CONFIG.planName,
     amount: BILLING_CONFIG.amount,
+    amountYearly: BILLING_CONFIG.amountYearly,
+    yearlyEnabled: BILLING_CONFIG.yearlyEnabled,
     trialDays: BILLING_CONFIG.trialDays,
   };
 };
@@ -74,7 +76,8 @@ export const action = async ({ request }) => {
 };
 
 export default function BillingPage() {
-  const { hasActivePlan, plan, amount, trialDays } = useLoaderData();
+  const { hasActivePlan, plan, amount, amountYearly, yearlyEnabled, trialDays } = useLoaderData();
+  const monthsFree = amount > 0 ? Math.round((amount * 12 - amountYearly) / amount) : 0;
   const actionData = useActionData();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -139,6 +142,11 @@ export default function BillingPage() {
                 <BlockStack gap="100" inlineAlign="end">
                   <Text variant="heading3xl" as="p">${amount}</Text>
                   <Text variant="bodySm" as="p" tone="subdued">/ month</Text>
+                  {yearlyEnabled && (
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      or ${amountYearly}/year{monthsFree > 0 ? ` (${monthsFree} months free)` : ""}
+                    </Text>
+                  )}
                 </BlockStack>
               </InlineStack>
 
