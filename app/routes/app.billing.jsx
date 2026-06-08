@@ -183,8 +183,11 @@ export default function BillingPage() {
         <Layout.Section>
           <Box paddingBlockStart="400">
             <Text variant="bodySm" as="p" tone="subdued">
-              Billed every 30 days through Shopify. Subscribe, change, or cancel your plan from this
-              page — all changes are handled securely on Shopify's billing page and reflected here.
+              {yearlyEnabled
+                ? `Choose monthly ($${amount}/30 days) or yearly ($${amountYearly}/year${monthsFree > 0 ? `, ${monthsFree} months free` : ""}) billing through Shopify. `
+                : "Billed every 30 days through Shopify. "}
+              Subscribe, change, or cancel your plan from this page — all changes are handled
+              securely on Shopify's billing page and reflected here.
             </Text>
           </Box>
         </Layout.Section>
