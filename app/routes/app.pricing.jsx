@@ -208,6 +208,7 @@ const styles = {
     height: 200,
     borderRadius: "50%",
     background: "rgba(255,255,255,0.04)",
+    pointerEvents: "none",
   },
   topRow: {
     display: "flex",
@@ -215,6 +216,8 @@ const styles = {
     justifyContent: "space-between",
     gap: 10,
     marginBottom: 24,
+    position: "relative",
+    zIndex: 1,
   },
   planBadge: {
     display: "inline-block",

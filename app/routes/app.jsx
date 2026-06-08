@@ -260,10 +260,11 @@ const pricingStyles = {
     position: "absolute", top: -30, right: -30,
     width: 130, height: 130, borderRadius: "50%",
     background: "rgba(255,255,255,0.04)",
+    pointerEvents: "none",
   },
   topRow: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    gap: 8, marginBottom: 10,
+    gap: 8, marginBottom: 10, position: "relative", zIndex: 1,
   },
   planBadge: {
     display: "inline-block", background: "#2C2C2E", color: "#D1D5DB",
