@@ -6,6 +6,7 @@ import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import { authenticate, sessionStorage } from "../shopify.server";
 import {
   getBillingState,
+  getBillingStateCached,
   managedPricingUrl,
   appBridgeRedirect,
   BILLING_CONFIG,
@@ -24,9 +25,10 @@ export const loader = async ({ request }) => {
 
   let hasActivePlan = false;
   try {
-    // Live subscription state from Shopify is the source of truth for managed
-    // pricing — so subscribe/cancel done on Shopify's page reflect instantly.
-    const state = await getBillingState(admin);
+    // Subscription state gates the whole app. Cached per-shop (positive results
+    // only) so paying merchants don't pay a Shopify roundtrip on every click;
+    // a fresh subscribe still unlocks instantly since negatives aren't cached.
+    const state = await getBillingStateCached(admin, session.shop);
     hasActivePlan = state.hasActivePlan;
   } catch (e) {
     // Propagate redirect Responses (e.g. OAuth flow initiated by the library),

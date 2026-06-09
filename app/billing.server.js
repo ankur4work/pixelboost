@@ -64,6 +64,31 @@ export async function getBillingState(admin) {
   };
 }
 
+// Per-shop cache of the billing state to avoid a Shopify GraphQL roundtrip on
+// EVERY page navigation. We deliberately cache only the POSITIVE result
+// (hasActivePlan === true): paying merchants — who navigate the app the most —
+// get instant page loads, while non-subscribers are always re-checked so the
+// moment they subscribe on Shopify's page and return, the app unlocks
+// instantly. A cancel relocks within BILLING_TTL_MS, which is fine.
+const billingCache = new Map(); // shop -> { state, expires }
+const BILLING_TTL_MS = 120 * 1000;
+
+export async function getBillingStateCached(admin, shop) {
+  if (shop) {
+    const hit = billingCache.get(shop);
+    if (hit && hit.expires > Date.now()) return hit.state;
+  }
+  const state = await getBillingState(admin);
+  if (shop) {
+    if (state.hasActivePlan) {
+      billingCache.set(shop, { state, expires: Date.now() + BILLING_TTL_MS });
+    } else {
+      billingCache.delete(shop);
+    }
+  }
+  return state;
+}
+
 // Builds the Shopify-hosted managed-pricing page URL where merchants can
 // subscribe, change, or cancel their plan.
 export function managedPricingUrl(shop, appHandle) {

@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLoaderData, useFetcher, useSubmit, useRevalidator } from 'react-router';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useLoaderData, useFetcher, useRevalidator } from 'react-router';
 import { authenticate } from '../shopify.server';
 import {
   Page,
@@ -212,18 +212,10 @@ export async function loader({ request }) {
       };
     });
 
-    let filtered = processedProducts;
-    if (filter === 'needs_optimization') filtered = filtered.filter(p => p.needsOptimization);
-    else if (filter === 'optimized') filtered = filtered.filter(p => !p.needsOptimization);
-    else if (filter === 'no_alt_text') filtered = filtered.filter(p => p.imagesWithAlt === 0);
-
-    if (sortBy === 'score_asc') filtered.sort((a, b) => a.score - b.score);
-    else if (sortBy === 'score_desc') filtered.sort((a, b) => b.score - a.score);
-    else if (sortBy === 'size_desc') filtered.sort((a, b) => b.totalOriginalSizeMB - a.totalOriginalSizeMB);
-    else if (sortBy === 'images_desc') filtered.sort((a, b) => b.imageCount - a.imageCount);
-
+    // Return ALL products; filtering/sorting happens instantly on the client
+    // from this list, so changing a filter never re-runs this (heavy) loader.
     return {
-      products: filtered,
+      products: processedProducts,
       filter,
       sortBy,
       stats: {
@@ -612,7 +604,6 @@ export async function action({ request }) {
 export default function ProductOptimization() {
   const { products, filter: initialFilter, sortBy: initialSortBy, stats, error: loadError } = useLoaderData();
   const fetcher = useFetcher();
-  const submit = useSubmit();
   const revalidator = useRevalidator();
 
   const [filter, setFilter] = useState(initialFilter);
@@ -626,9 +617,6 @@ export default function ProductOptimization() {
   const [activeId, setActiveId] = useState(null);
   const queueRef = useRef([]);
   const activeRef = useRef(null);
-
-  useEffect(() => { setFilter(initialFilter); }, [initialFilter]);
-  useEffect(() => { setSortBy(initialSortBy); }, [initialSortBy]);
 
   const startNext = useCallback(() => {
     const next = queueRef.current.shift();
@@ -683,23 +671,34 @@ export default function ProductOptimization() {
     startNext();
   }, [startNext]);
 
-  const handleFilterChange = useCallback((value) => {
-    setFilter(value);
-    submit({ filter: value, sortBy }, { method: 'get' });
-  }, [sortBy, submit]);
+  // Filter/sort are pure client-side transforms of the already-loaded product
+  // list — no server roundtrip, so the list updates instantly.
+  const handleFilterChange = useCallback((value) => setFilter(value), []);
+  const handleSortChange = useCallback((value) => setSortBy(value), []);
 
-  const handleSortChange = useCallback((value) => {
-    setSortBy(value);
-    submit({ filter, sortBy: value }, { method: 'get' });
-  }, [filter, submit]);
+  const displayedProducts = useMemo(() => {
+    let list = products;
+    if (filter === 'needs_optimization') list = list.filter(p => p.needsOptimization);
+    else if (filter === 'optimized') list = list.filter(p => !p.needsOptimization);
+    else if (filter === 'no_alt_text') list = list.filter(p => p.imagesWithAlt === 0);
+
+    // Sort a copy so we never mutate loader data (which would corrupt the next
+    // filter pass). Score reflects live progress, so re-sorts stay correct.
+    const sorted = [...list];
+    if (sortBy === 'score_asc') sorted.sort((a, b) => a.score - b.score);
+    else if (sortBy === 'score_desc') sorted.sort((a, b) => b.score - a.score);
+    else if (sortBy === 'size_desc') sorted.sort((a, b) => b.totalOriginalSizeMB - a.totalOriginalSizeMB);
+    else if (sortBy === 'images_desc') sorted.sort((a, b) => b.imageCount - a.imageCount);
+    return sorted;
+  }, [products, filter, sortBy]);
 
   const handleSelectProduct = useCallback((id) => {
     setSelectedProducts(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
   }, []);
 
   const handleSelectAll = useCallback(() => {
-    setSelectedProducts(selectedProducts.length === products.length ? [] : products.map(p => p.id));
-  }, [selectedProducts.length, products]);
+    setSelectedProducts(selectedProducts.length === displayedProducts.length ? [] : displayedProducts.map(p => p.id));
+  }, [selectedProducts.length, displayedProducts]);
 
   const handleOptimizeProduct = useCallback((id) => beginQueue([id]), [beginQueue]);
   const handleOptimizeSelected = useCallback(() => {
@@ -833,8 +832,8 @@ export default function ProductOptimization() {
               </InlineStack>
               <Divider />
               <Checkbox
-                label={`Select All (${products.length} products)`}
-                checked={selectedProducts.length === products.length && products.length > 0}
+                label={`Select All (${displayedProducts.length} products)`}
+                checked={selectedProducts.length === displayedProducts.length && displayedProducts.length > 0}
                 onChange={handleSelectAll}
                 disabled={isBusy}
               />
@@ -845,12 +844,12 @@ export default function ProductOptimization() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              {products.length === 0 ? (
+              {displayedProducts.length === 0 ? (
                 <EmptyState heading="No products found" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png">
                   <p>Try adjusting your filters to see products.</p>
                 </EmptyState>
               ) : (
-                products.map((raw) => {
+                displayedProducts.map((raw) => {
                   const product = view(raw);
                   const isActive = activeId === product.id;
                   return (

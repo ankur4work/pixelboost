@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect } from 'react';
-import { useLoaderData, useSubmit, useNavigation, useActionData } from 'react-router';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { useLoaderData, useSubmit, useNavigation, useActionData, useFetcher } from 'react-router';
 import { authenticate } from '../shopify.server';
+import { setDefaultResultOrder } from 'node:dns';
 import { 
   Page, 
   Layout, 
@@ -16,8 +17,35 @@ import {
   Thumbnail, 
   Divider, 
   Banner,
-  Select 
+  Select,
+  ProgressBar
 } from '@shopify/polaris';
+
+// How many images the client asks the server to caption per request. Small
+// batches keep every request short (a few seconds) so they never hit a proxy
+// or browser timeout — the client drives the loop and shows live progress.
+const GEN_BATCH_SIZE = 5;
+
+// Prefer IPv4 + cap every upstream call so a slow OpenAI/Anthropic/CDN response
+// can never stall a request indefinitely (the old monolithic flow had no cap
+// and would hang for minutes, making the feature look broken).
+let dnsConfigured = false;
+function preferIPv4() {
+  if (dnsConfigured) return;
+  try { setDefaultResultOrder('ipv4first'); } catch { /* older runtimes */ }
+  dnsConfigured = true;
+}
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 20000) {
+  preferIPv4();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function verifyOpenAIKey() {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -51,6 +79,7 @@ async function verifyOpenAIKey() {
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
+  try {
   const response = await admin.graphql(
     `#graphql
       query GetProductsWithImages {
@@ -104,6 +133,10 @@ export async function loader({ request }) {
   });
 
   return { images: imagesList };
+  } catch (error) {
+    console.error('Error loading products for alt text:', error);
+    return { images: [], loadError: 'Could not load product images. Please refresh to try again.' };
+  }
 }
 
 export async function action({ request }) {
@@ -205,40 +238,32 @@ export async function action({ request }) {
     }
   }
 
+  // Caption ONE small batch per request. The client splits pending images into
+  // GEN_BATCH_SIZE chunks and calls this repeatedly, so every request stays
+  // short (a few seconds) and can never time out — no matter how big the store.
   if (actionType === 'generateSuggestions') {
     try {
       const imagesData = JSON.parse(formData.get('images'));
       const aiProvider = formData.get('aiProvider') || 'openai';
-      const batchSize = 3;
-      const suggestions = [];
 
-      for (let i = 0; i < imagesData.length; i += batchSize) {
-        const batch = imagesData.slice(i, i + batchSize);
+      const suggestions = await Promise.all(
+        imagesData.map(async (image) => {
+          try {
+            const suggestion = await generateAIAltText(image.url, image.productTitle, aiProvider);
+            return { id: image.id, suggestedAlt: suggestion.altText, seoScore: suggestion.seoScore };
+          } catch (error) {
+            return {
+              id: image.id,
+              suggestedAlt: generateSmartFallback(image.productTitle, image.url),
+              seoScore: 70
+            };
+          }
+        })
+      );
 
-        const batchResults = await Promise.all(
-          batch.map(async (image) => {
-            try {
-              const suggestion = await generateAIAltText(image.url, image.productTitle, aiProvider);
-              return { id: image.id, suggestedAlt: suggestion.altText, seoScore: suggestion.seoScore };
-            } catch (error) {
-              return {
-                id: image.id,
-                suggestedAlt: generateSmartFallback(image.productTitle, image.url),
-                seoScore: 70
-              };
-            }
-          })
-        );
-        suggestions.push(...batchResults);
-
-        if (i + batchSize < imagesData.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      }
-
-      return { success: true, suggestions };
+      return { success: true, kind: 'suggestions', suggestions };
     } catch (error) {
-      return { success: false, error: 'Failed to generate AI suggestions: ' + error.message };
+      return { success: false, kind: 'suggestions', error: 'Failed to generate AI suggestions: ' + error.message };
     }
   }
 
@@ -271,7 +296,7 @@ async function generateWithOpenAI(imageUrl, productTitle) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -304,7 +329,7 @@ Return ONLY the alt text, nothing else.`
         ]
       }]
     })
-  });
+  }, 25000);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -323,7 +348,7 @@ async function generateWithAnthropic(imageUrl, productTitle) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
 
-  const imageResponse = await fetch(imageUrl);
+  const imageResponse = await fetchWithTimeout(imageUrl, {}, 20000);
   if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status}`);
 
   const imageBuffer = await imageResponse.arrayBuffer();
@@ -335,7 +360,7 @@ async function generateWithAnthropic(imageUrl, productTitle) {
   else if (urlLower.includes('.webp')) mediaType = 'image/webp';
   else if (urlLower.includes('.gif')) mediaType = 'image/gif';
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -371,7 +396,7 @@ Return ONLY the alt text, nothing else.`
         ]
       }]
     })
-  });
+  }, 30000);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -418,20 +443,71 @@ function generateSmartFallbackObject(productTitle, imageUrl) {
 }
 
 export default function AltTextSuggestions() {
-  const { images: initialImages } = useLoaderData();
+  const { images: initialImages, loadError } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
+  // Generation runs through its own fetcher so it doesn't block (or get blocked
+  // by) navigation/apply submits, and so each batch is an independent request.
+  const genFetcher = useFetcher();
 
   const [images, setImages] = useState(initialImages);
   const [selectedImages, setSelectedImages] = useState([]);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState(loadError || null);
   const [successMessage, setSuccessMessage] = useState(null);
   const [aiProvider, setAiProvider] = useState('openai');
   const [isVerifying, setIsVerifying] = useState(false);
 
+  // Live progress for the batched generation loop: queue of remaining batches
+  // plus a {done,total} counter so the user sees movement instead of a frozen
+  // spinner during a long single request.
+  const genQueueRef = useRef([]);
+  const genProviderRef = useRef('openai');
+  const [genProgress, setGenProgress] = useState(null); // { done, total } | null
+
+  const isGenerating = genProgress !== null;
   const isSubmitting = navigation.state === 'submitting';
-  const isGenerating = navigation.state === 'submitting' && navigation.formData?.get('actionType') === 'generateSuggestions';
+
+  // Submit the next queued batch, or finish if the queue is empty.
+  const submitNextBatch = useCallback(() => {
+    const batch = genQueueRef.current.shift();
+    if (!batch) {
+      setGenProgress(null);
+      setSuccessMessage('AI suggestions generated successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+      return;
+    }
+    const formData = new FormData();
+    formData.append('actionType', 'generateSuggestions');
+    formData.append('aiProvider', genProviderRef.current);
+    formData.append('images', JSON.stringify(batch.map(img => ({
+      id: img.id, url: img.url, productTitle: img.productTitle
+    }))));
+    genFetcher.submit(formData, { method: 'post' });
+  }, [genFetcher]);
+
+  // Merge each completed batch's suggestions, advance progress, fire the next.
+  useEffect(() => {
+    if (genFetcher.state !== 'idle' || !genFetcher.data) return;
+    const data = genFetcher.data;
+    if (data.kind !== 'suggestions') return;
+
+    if (data.success && data.suggestions) {
+      setImages(prev =>
+        prev.map(img => {
+          const suggestion = data.suggestions.find(s => s.id === img.id);
+          return suggestion
+            ? { ...img, suggestedAlt: suggestion.suggestedAlt, seoScore: suggestion.seoScore }
+            : img;
+        })
+      );
+      setGenProgress(prev => prev ? { ...prev, done: Math.min(prev.total, prev.done + data.suggestions.length) } : prev);
+    } else if (data.error) {
+      setError(data.error);
+    }
+    submitNextBatch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genFetcher.state, genFetcher.data]);
 
   const handleVerifyApiKey = useCallback(() => {
     setError(null);
@@ -443,19 +519,7 @@ export default function AltTextSuggestions() {
   }, [submit]);
 
   useEffect(() => {
-    if (actionData?.success && actionData?.suggestions) {
-      setImages(prev =>
-        prev.map(img => {
-          const suggestion = actionData.suggestions.find(s => s.id === img.id);
-          if (suggestion) {
-            return { ...img, suggestedAlt: suggestion.suggestedAlt, seoScore: suggestion.seoScore };
-          }
-          return img;
-        })
-      );
-      setSuccessMessage('AI suggestions generated successfully!');
-      setTimeout(() => setSuccessMessage(null), 3000);
-    } else if (actionData?.workingModel) {
+    if (actionData?.workingModel) {
       setSuccessMessage(actionData.message);
       setIsVerifying(false);
       setTimeout(() => setSuccessMessage(null), 5000);
@@ -469,20 +533,24 @@ export default function AltTextSuggestions() {
   }, [actionData]);
 
   const generateSuggestions = useCallback(() => {
+    if (isGenerating) return;
     setError(null);
     const pendingImages = images.filter(img => img.status === 'pending' && !img.suggestedAlt);
     if (pendingImages.length === 0) {
       setError('All images already have suggestions. Clear existing suggestions to regenerate.');
       return;
     }
-    const formData = new FormData();
-    formData.append('actionType', 'generateSuggestions');
-    formData.append('aiProvider', aiProvider);
-    formData.append('images', JSON.stringify(pendingImages.map(img => ({
-      id: img.id, url: img.url, productTitle: img.productTitle
-    }))));
-    submit(formData, { method: 'post' });
-  }, [images, aiProvider, submit]);
+    // Split into small batches the client feeds to the server one at a time, so
+    // a 200-image store never lives or dies on one multi-minute request.
+    const batches = [];
+    for (let i = 0; i < pendingImages.length; i += GEN_BATCH_SIZE) {
+      batches.push(pendingImages.slice(i, i + GEN_BATCH_SIZE));
+    }
+    genQueueRef.current = batches;
+    genProviderRef.current = aiProvider;
+    setGenProgress({ done: 0, total: pendingImages.length });
+    submitNextBatch();
+  }, [images, aiProvider, isGenerating, submitNextBatch]);
 
   const handleSelectImage = useCallback((id) => {
     setSelectedImages(prev => prev.includes(id) ? prev.filter(imgId => imgId !== id) : [...prev, id]);
@@ -614,7 +682,9 @@ export default function AltTextSuggestions() {
                     />
                   </Box>
                   <Button onClick={generateSuggestions} loading={isGenerating} disabled={isGenerating}>
-                    {isGenerating ? 'Analyzing Images...' : 'Generate AI Suggestions'}
+                    {isGenerating
+                      ? `Analyzing ${genProgress.done}/${genProgress.total}...`
+                      : 'Generate AI Suggestions'}
                   </Button>
                   {selectedImages.length > 0 && (
                     <Button
@@ -628,6 +698,19 @@ export default function AltTextSuggestions() {
                   )}
                 </InlineStack>
               </InlineStack>
+
+              {isGenerating && (
+                <BlockStack gap="200">
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    {`Generating alt text — ${genProgress.done} of ${genProgress.total} images`}
+                  </Text>
+                  <ProgressBar
+                    progress={genProgress.total > 0 ? Math.round((genProgress.done / genProgress.total) * 100) : 0}
+                    size="small"
+                    tone="primary"
+                  />
+                </BlockStack>
+              )}
 
               <Divider />
 
