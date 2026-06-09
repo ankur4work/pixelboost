@@ -563,22 +563,6 @@ async function optimizeBatch(admin, productId) {
   const remaining = total - processed;
   const advanced = newRecords.length > 0;
 
-  const optimizedNow = newRecords.filter(r => r.record.status === 'optimized').length;
-  const skippedNow = newRecords.filter(r => r.record.status === 'skipped').length;
-  console.log('[OPT]', JSON.stringify({
-    p: String(productId).split('/').pop(),
-    total,
-    pending: pending.length,
-    batch: batch.length,
-    optimizedNow,
-    skippedNow,
-    failedNow: batch.length - newRecords.length,
-    processed,
-    remaining,
-    origMB: Number(totals.totalOriginalSizeMB.toFixed(3)),
-    savedMB: Number(totals.totalSizeSavedMB.toFixed(3)),
-  }));
-
   return {
     success: true,
     productId,
