@@ -91,6 +91,7 @@ const PRODUCTS_QUERY = `#graphql
         node {
           id
           title
+          featuredImage { url altText }
           media(first: 250) {
             edges {
               node {
@@ -113,9 +114,11 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Page through the whole catalog (metadata only, so this stays fast) and
-    // flatten every product image into one list the client paginates locally.
-    const imagesList = [];
+    // Page through the whole catalog (metadata only, so this stays fast).
+    // Alt text is generated ONCE per product (from its main image) and applied
+    // to ALL of that product's images, so each row here is a PRODUCT, carrying
+    // every image id so a single caption can be written to all of them.
+    const rows = [];
     let cursor = null;
     let hasNextPage = true;
     let pages = 0;
@@ -128,18 +131,28 @@ export async function loader({ request }) {
       const conn = data.data.products;
 
       conn.edges.forEach(({ node: product }) => {
-        product.media.edges.forEach(({ node: media }) => {
-          if (media.mediaContentType !== 'IMAGE') return;
-          imagesList.push({
-            id: media.id,           // gid://shopify/MediaImage/...
-            productId: product.id,
-            productTitle: product.title,
-            url: media.image?.url || '',
-            currentAlt: media.alt || '',
-            suggestedAlt: '',
-            seoScore: calculateSeoScore(media.alt),
-            status: 'pending'
-          });
+        const productImages = product.media.edges
+          .map(e => e.node)
+          .filter(n => n && n.mediaContentType === 'IMAGE' && n.image?.url)
+          .map(n => ({ id: n.id, url: n.image.url, alt: n.alt || '' }));
+        if (productImages.length === 0) return; // nothing to caption
+
+        // Use the merchandising "main" image for the thumbnail + AI input,
+        // falling back to the first media image.
+        const main = productImages.find(i => i.url === product.featuredImage?.url) || productImages[0];
+        const currentAlt = product.featuredImage?.altText || main.alt || '';
+
+        rows.push({
+          id: product.id,                       // row id = product id
+          productId: product.id,
+          productTitle: product.title,
+          url: main.url,                        // main image (thumbnail + AI)
+          imageIds: productImages.map(i => i.id), // apply caption to ALL of these
+          imageCount: productImages.length,
+          currentAlt,
+          suggestedAlt: '',
+          seoScore: calculateSeoScore(currentAlt),
+          status: 'pending'
         });
       });
 
@@ -148,7 +161,7 @@ export async function loader({ request }) {
       pages += 1;
     }
 
-    return { images: imagesList, truncated };
+    return { images: rows, truncated };
   } catch (error) {
     console.error('Error loading products for alt text:', error);
     return { images: [], loadError: 'Could not load product images. Please refresh to try again.' };
@@ -164,95 +177,58 @@ export async function action({ request }) {
     return await verifyOpenAIKey();
   }
 
-  // ✅ Using fileUpdate with correct response fields
-  if (actionType === 'applyAltText') {
-    const imageId = formData.get('imageId');
-    const altText = formData.get('altText');
-
-    try {
+  // Apply one product's caption to ALL of its images (chunked under Shopify's
+  // 250-file limit). Returns the first userError message, or null on success.
+  async function writeAltToFiles(files) {
+    const FILE_UPDATE_LIMIT = 250;
+    for (let i = 0; i < files.length; i += FILE_UPDATE_LIMIT) {
+      const chunk = files.slice(i, i + FILE_UPDATE_LIMIT);
       const response = await admin.graphql(
         `#graphql
           mutation fileUpdate($files: [FileUpdateInput!]!) {
             fileUpdate(files: $files) {
-              files {
-                id
-                alt
-              }
-              userErrors {
-                field
-                message
-              }
+              files { id alt }
+              userErrors { field message }
             }
           }
         `,
-        {
-          variables: {
-            files: [{ id: imageId, alt: altText }]
-          }
-        }
+        { variables: { files: chunk } }
       );
-
       const result = await response.json();
+      const err = result.data?.fileUpdate?.userErrors?.[0];
+      if (err) return err.message;
+    }
+    return null;
+  }
 
-      if (result.data?.fileUpdate?.userErrors?.length > 0) {
-        return {
-          success: false,
-          error: result.data.fileUpdate.userErrors[0].message
-        };
-      }
+  // Apply a single product's caption to every image of that product.
+  if (actionType === 'applyAltText') {
+    const imageIds = JSON.parse(formData.get('imageIds') || '[]');
+    const altText = formData.get('altText');
 
-      return { success: true, message: 'Alt text applied successfully!' };
+    try {
+      const files = imageIds.map(id => ({ id, alt: altText }));
+      const errMsg = await writeAltToFiles(files);
+      if (errMsg) return { success: false, error: errMsg };
+      return { success: true, message: 'Alt text applied to all images of the product!' };
     } catch (error) {
       console.error('Error updating image:', error);
       return { success: false, error: 'Failed to update image alt text: ' + error.message };
     }
   }
 
-  // ✅ Bulk apply using fileUpdate. Shopify caps the files array at 250 per
-  // mutation, so chunk larger selections into batches and aggregate results.
+  // Bulk apply: each update is a product's caption + all of its image ids.
+  // Flatten to a flat files list (one entry per image) and write chunked.
   if (actionType === 'applyBulk') {
-    const updates = JSON.parse(formData.get('updates'));
-    const FILE_UPDATE_LIMIT = 250;
+    const updates = JSON.parse(formData.get('updates')); // [{ imageIds, altText }]
 
     try {
-      for (let i = 0; i < updates.length; i += FILE_UPDATE_LIMIT) {
-        const chunk = updates.slice(i, i + FILE_UPDATE_LIMIT);
-        const response = await admin.graphql(
-          `#graphql
-            mutation fileUpdate($files: [FileUpdateInput!]!) {
-              fileUpdate(files: $files) {
-                files {
-                  id
-                  alt
-                }
-                userErrors {
-                  field
-                  message
-                }
-              }
-            }
-          `,
-          {
-            variables: {
-              files: chunk.map(({ imageId, altText }) => ({
-                id: imageId,
-                alt: altText
-              }))
-            }
-          }
-        );
-
-        const result = await response.json();
-
-        if (result.data?.fileUpdate?.userErrors?.length > 0) {
-          return {
-            success: false,
-            error: result.data.fileUpdate.userErrors[0].message
-          };
-        }
-      }
-
-      return { success: true, message: `Successfully updated ${updates.length} images` };
+      const files = updates.flatMap(({ imageIds, altText }) =>
+        (imageIds || []).map(id => ({ id, alt: altText }))
+      );
+      const errMsg = await writeAltToFiles(files);
+      if (errMsg) return { success: false, error: errMsg };
+      return { success: true, message: `Applied captions to ${updates.length} products (${files.length} images)` };
     } catch (error) {
       console.error('Error in bulk update:', error);
       return { success: false, error: 'Failed to update some images: ' + error.message };
@@ -557,16 +533,16 @@ export default function AltTextSuggestions() {
   const generateSuggestions = useCallback(() => {
     if (isGenerating) return;
     setError(null);
-    // If the user checked specific images, only generate for those; otherwise
-    // generate for every pending image that doesn't already have a suggestion.
+    // If the user checked specific products, only generate for those; otherwise
+    // generate one caption for every pending product. One API call per product.
     const needsSuggestion = (img) => img.status === 'pending' && !img.suggestedAlt;
     const pendingImages = selectedImages.length > 0
       ? images.filter(img => selectedImages.includes(img.id) && needsSuggestion(img))
       : images.filter(needsSuggestion);
     if (pendingImages.length === 0) {
       setError(selectedImages.length > 0
-        ? 'Selected images already have suggestions (or are already applied).'
-        : 'All images already have suggestions. Clear existing suggestions to regenerate.');
+        ? 'Selected products already have suggestions (or are already applied).'
+        : 'All products already have suggestions. Clear existing suggestions to regenerate.');
       return;
     }
     // Split into small batches the client feeds to the server one at a time, so
@@ -590,34 +566,34 @@ export default function AltTextSuggestions() {
     setSelectedImages(selectedImages.length === pendingImages.length ? [] : pendingImages.map(img => img.id));
   }, [selectedImages.length, images]);
 
-  const handleApply = useCallback((imageId) => {
-    const image = images.find(img => img.id === imageId);
-    if (!image.suggestedAlt) {
+  const handleApply = useCallback((productId) => {
+    const product = images.find(img => img.id === productId);
+    if (!product.suggestedAlt) {
       setError('Please generate a suggestion first');
       return;
     }
     const formData = new FormData();
     formData.append('actionType', 'applyAltText');
-    formData.append('imageId', image.id);
-    formData.append('altText', image.suggestedAlt);
+    formData.append('imageIds', JSON.stringify(product.imageIds));
+    formData.append('altText', product.suggestedAlt);
     submit(formData, { method: 'post' });
     setImages(prev => prev.map(img =>
-      img.id === imageId ? { ...img, currentAlt: img.suggestedAlt, status: 'applied' } : img
+      img.id === productId ? { ...img, currentAlt: img.suggestedAlt, status: 'applied' } : img
     ));
-    setSelectedImages(prev => prev.filter(id => id !== imageId));
+    setSelectedImages(prev => prev.filter(id => id !== productId));
   }, [images, submit]);
 
   const handleApplySelected = useCallback(() => {
     const updates = selectedImages
       .map(id => {
-        const image = images.find(img => img.id === id);
-        if (!image.suggestedAlt) return null;
-        return { imageId: image.id, altText: image.suggestedAlt };
+        const product = images.find(img => img.id === id);
+        if (!product?.suggestedAlt) return null;
+        return { imageIds: product.imageIds, altText: product.suggestedAlt };
       })
       .filter(Boolean);
 
     if (updates.length === 0) {
-      setError('Please generate suggestions for selected images first');
+      setError('Please generate suggestions for selected products first');
       return;
     }
     const formData = new FormData();
@@ -649,11 +625,11 @@ export default function AltTextSuggestions() {
     { label: 'Smart Fallback (No API)', value: 'fallback' }
   ];
 
+  // Each row is a PRODUCT (one caption per product, applied to all its images).
   const pendingCount = images.filter(img => img.status === 'pending').length;
   const appliedCount = images.filter(img => img.status === 'applied').length;
-  // Alt text is per-IMAGE, so each row is one image. Surface the product count
-  // too so "800" reads as images across N products, not 800 products.
-  const productCount = new Set(images.map(img => img.productId)).size;
+  const productCount = images.length;
+  const totalImages = images.reduce((sum, img) => sum + (img.imageCount || 0), 0);
 
   // Keep the current page valid as the image count changes (e.g. after a load).
   const pageCount = Math.max(1, Math.ceil(images.length / PAGE_SIZE));
@@ -669,7 +645,7 @@ export default function AltTextSuggestions() {
   return (
     <Page
       title="PixelBoost — AI Alt Text Generator"
-      subtitle="Improve SEO and accessibility with AI-powered image descriptions"
+      subtitle="One AI caption per product, applied to all its images — saves API usage"
     >
       <Layout>
         <Layout.Section>
@@ -700,8 +676,8 @@ export default function AltTextSuggestions() {
         {truncated && (
           <Layout.Section>
             <Banner tone="info">
-              Showing the first {images.length} images. This store has a very large catalog,
-              so optimize these and reload to continue with the rest.
+              Showing the first {images.length} products. This store has a very large catalog,
+              so caption these and reload to continue with the rest.
             </Banner>
           </Layout.Section>
         )}
@@ -717,7 +693,7 @@ export default function AltTextSuggestions() {
                   </BlockStack>
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Total Images</Text>
-                    <Text variant="heading2xl" as="h2">{images.length}</Text>
+                    <Text variant="heading2xl" as="h2">{totalImages}</Text>
                   </BlockStack>
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Pending</Text>
@@ -780,7 +756,7 @@ export default function AltTextSuggestions() {
                 {images.length === 0 ? (
                   <Box padding="1600">
                     <BlockStack gap="400" inlineAlign="center">
-                      <Text variant="headingMd" as="h3" alignment="center">No images found</Text>
+                      <Text variant="headingMd" as="h3" alignment="center">No products found</Text>
                       <Text variant="bodyMd" as="p" tone="subdued" alignment="center">
                         Add products with images to get started.
                       </Text>
@@ -798,7 +774,10 @@ export default function AltTextSuggestions() {
                         <Thumbnail source={image.url} alt={image.currentAlt || 'Product image'} size="large" />
                         <Box width="100%">
                           <BlockStack gap="400">
-                            <Text variant="headingSm" as="h4">{image.productTitle}</Text>
+                            <InlineStack gap="200" blockAlign="center">
+                              <Text variant="headingSm" as="h4">{image.productTitle}</Text>
+                              <Badge tone="info">{`${image.imageCount} ${image.imageCount === 1 ? 'image' : 'images'}`}</Badge>
+                            </InlineStack>
 
                             <InlineStack align="space-between">
                               <Box width="65%">
@@ -820,6 +799,7 @@ export default function AltTextSuggestions() {
                             <BlockStack gap="300">
                               <InlineStack gap="200" blockAlign="center">
                                 <Text variant="bodySm" as="p" fontWeight="semibold">AI Suggested Alt Text</Text>
+                                <Text variant="bodySm" as="span" tone="subdued">(applied to all {image.imageCount} images)</Text>
                                 {image.status === 'applied' && <Badge tone="success">Applied</Badge>}
                               </InlineStack>
                               <TextField
@@ -857,7 +837,7 @@ export default function AltTextSuggestions() {
                     onPrevious={() => setPage(p => Math.max(0, p - 1))}
                     hasNext={safePage < pageCount - 1}
                     onNext={() => setPage(p => Math.min(pageCount - 1, p + 1))}
-                    label={`${rangeStart}–${rangeEnd} of ${images.length} images`}
+                    label={`${rangeStart}–${rangeEnd} of ${images.length} products`}
                   />
                 </InlineStack>
               )}
