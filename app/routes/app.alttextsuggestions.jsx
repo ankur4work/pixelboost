@@ -18,8 +18,11 @@ import {
   Divider, 
   Banner,
   Select,
-  ProgressBar
+  ProgressBar,
+  Pagination
 } from '@shopify/polaris';
+
+const PAGE_SIZE = 20;
 
 // How many images the client asks the server to caption per request. Small
 // batches keep every request short (a few seconds) so they never hit a proxy
@@ -76,63 +79,76 @@ async function verifyOpenAIKey() {
   }
 }
 
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
+// Safety cap so a pathologically large catalog can't make the loader run
+// forever. 200 pages x 50 products = up to 10,000 products.
+const MAX_PRODUCT_PAGES = 200;
 
-  try {
-  const response = await admin.graphql(
-    `#graphql
-      query GetProductsWithImages {
-        products(first: 50) {
-          edges {
-            node {
-              id
-              title
-              media(first: 10) {
-                edges {
-                  node {
-                    id
-                    alt
-                    mediaContentType
-                    ... on MediaImage {
-                      id
-                      alt
-                      image {
-                        url
-                      }
-                    }
-                  }
+const PRODUCTS_QUERY = `#graphql
+  query GetProductsWithImages($cursor: String) {
+    products(first: 50, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id
+          title
+          media(first: 250) {
+            edges {
+              node {
+                mediaContentType
+                ... on MediaImage {
+                  id
+                  alt
+                  image { url }
                 }
               }
             }
           }
         }
       }
-    `
-  );
+    }
+  }
+`;
 
-  const data = await response.json();
-  const imagesList = [];
+export async function loader({ request }) {
+  const { admin } = await authenticate.admin(request);
 
-  data.data.products.edges.forEach(({ node: product }) => {
-    product.media.edges.forEach(({ node: media }) => {
-      // Only process images, skip videos etc
-      if (media.mediaContentType !== 'IMAGE') return;
+  try {
+    // Page through the whole catalog (metadata only, so this stays fast) and
+    // flatten every product image into one list the client paginates locally.
+    const imagesList = [];
+    let cursor = null;
+    let hasNextPage = true;
+    let pages = 0;
+    let truncated = false;
 
-      imagesList.push({
-        id: media.id,           // ✅ This is gid://shopify/MediaImage/... 
-        productId: product.id,
-        productTitle: product.title,
-        url: media.image?.url || '',
-        currentAlt: media.alt || '',
-        suggestedAlt: '',
-        seoScore: calculateSeoScore(media.alt),
-        status: 'pending'
+    while (hasNextPage) {
+      if (pages >= MAX_PRODUCT_PAGES) { truncated = true; break; }
+      const response = await admin.graphql(PRODUCTS_QUERY, { variables: { cursor } });
+      const data = await response.json();
+      const conn = data.data.products;
+
+      conn.edges.forEach(({ node: product }) => {
+        product.media.edges.forEach(({ node: media }) => {
+          if (media.mediaContentType !== 'IMAGE') return;
+          imagesList.push({
+            id: media.id,           // gid://shopify/MediaImage/...
+            productId: product.id,
+            productTitle: product.title,
+            url: media.image?.url || '',
+            currentAlt: media.alt || '',
+            suggestedAlt: '',
+            seoScore: calculateSeoScore(media.alt),
+            status: 'pending'
+          });
+        });
       });
-    });
-  });
 
-  return { images: imagesList };
+      hasNextPage = conn.pageInfo.hasNextPage;
+      cursor = conn.pageInfo.endCursor;
+      pages += 1;
+    }
+
+    return { images: imagesList, truncated };
   } catch (error) {
     console.error('Error loading products for alt text:', error);
     return { images: [], loadError: 'Could not load product images. Please refresh to try again.' };
@@ -448,7 +464,7 @@ function generateSmartFallbackObject(productTitle, imageUrl) {
 }
 
 export default function AltTextSuggestions() {
-  const { images: initialImages, loadError } = useLoaderData();
+  const { images: initialImages, loadError, truncated } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -462,6 +478,7 @@ export default function AltTextSuggestions() {
   const [successMessage, setSuccessMessage] = useState(null);
   const [aiProvider, setAiProvider] = useState('openai');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [page, setPage] = useState(0);
 
   // Live progress for the batched generation loop: queue of remaining batches
   // plus a {done,total} counter so the user sees movement instead of a frozen
@@ -635,6 +652,17 @@ export default function AltTextSuggestions() {
   const pendingCount = images.filter(img => img.status === 'pending').length;
   const appliedCount = images.filter(img => img.status === 'applied').length;
 
+  // Keep the current page valid as the image count changes (e.g. after a load).
+  const pageCount = Math.max(1, Math.ceil(images.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+  const pageStart = safePage * PAGE_SIZE;
+  const pagedImages = images.slice(pageStart, pageStart + PAGE_SIZE);
+  const rangeStart = images.length === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + PAGE_SIZE, images.length);
+
   return (
     <Page
       title="PixelBoost — AI Alt Text Generator"
@@ -662,6 +690,15 @@ export default function AltTextSuggestions() {
           <Layout.Section>
             <Banner title="Success" tone="success" onDismiss={() => setSuccessMessage(null)}>
               {successMessage}
+            </Banner>
+          </Layout.Section>
+        )}
+
+        {truncated && (
+          <Layout.Section>
+            <Banner tone="info">
+              Showing the first {images.length} images. This store has a very large catalog,
+              so optimize these and reload to continue with the rest.
             </Banner>
           </Layout.Section>
         )}
@@ -743,7 +780,7 @@ export default function AltTextSuggestions() {
                     </BlockStack>
                   </Box>
                 ) : (
-                  images.slice(0, 20).map((image) => (
+                  pagedImages.map((image) => (
                     <Card key={image.id} background={selectedImages.includes(image.id) ? 'bg-surface-selected' : undefined}>
                       <InlineStack gap="400" blockAlign="start">
                         <Checkbox
@@ -805,6 +842,18 @@ export default function AltTextSuggestions() {
                   ))
                 )}
               </BlockStack>
+
+              {images.length > PAGE_SIZE && (
+                <InlineStack align="center" blockAlign="center" gap="400">
+                  <Pagination
+                    hasPrevious={safePage > 0}
+                    onPrevious={() => setPage(p => Math.max(0, p - 1))}
+                    hasNext={safePage < pageCount - 1}
+                    onNext={() => setPage(p => Math.min(pageCount - 1, p + 1))}
+                    label={`${rangeStart}–${rangeEnd} of ${images.length}`}
+                  />
+                </InlineStack>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
