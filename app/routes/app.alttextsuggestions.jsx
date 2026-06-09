@@ -651,6 +651,9 @@ export default function AltTextSuggestions() {
 
   const pendingCount = images.filter(img => img.status === 'pending').length;
   const appliedCount = images.filter(img => img.status === 'applied').length;
+  // Alt text is per-IMAGE, so each row is one image. Surface the product count
+  // too so "800" reads as images across N products, not 800 products.
+  const productCount = new Set(images.map(img => img.productId)).size;
 
   // Keep the current page valid as the image count changes (e.g. after a load).
   const pageCount = Math.max(1, Math.ceil(images.length / PAGE_SIZE));
@@ -709,16 +712,20 @@ export default function AltTextSuggestions() {
               <InlineStack align="space-between" blockAlign="center">
                 <InlineStack gap="800">
                   <BlockStack gap="200">
+                    <Text variant="bodySm" as="p" tone="subdued">Products</Text>
+                    <Text variant="heading2xl" as="h2">{productCount}</Text>
+                  </BlockStack>
+                  <BlockStack gap="200">
+                    <Text variant="bodySm" as="p" tone="subdued">Total Images</Text>
+                    <Text variant="heading2xl" as="h2">{images.length}</Text>
+                  </BlockStack>
+                  <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Pending</Text>
                     <Text variant="heading2xl" as="h2">{pendingCount}</Text>
                   </BlockStack>
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Applied</Text>
                     <Text variant="heading2xl" as="h2" tone="success">{appliedCount}</Text>
-                  </BlockStack>
-                  <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Total</Text>
-                    <Text variant="heading2xl" as="h2">{images.length}</Text>
                   </BlockStack>
                 </InlineStack>
                 <InlineStack gap="300" blockAlign="end">
@@ -850,7 +857,7 @@ export default function AltTextSuggestions() {
                     onPrevious={() => setPage(p => Math.max(0, p - 1))}
                     hasNext={safePage < pageCount - 1}
                     onNext={() => setPage(p => Math.min(pageCount - 1, p + 1))}
-                    label={`${rangeStart}–${rangeEnd} of ${images.length}`}
+                    label={`${rangeStart}–${rangeEnd} of ${images.length} images`}
                   />
                 </InlineStack>
               )}
