@@ -192,43 +192,48 @@ export async function action({ request }) {
     }
   }
 
-  // ✅ Bulk apply using fileUpdate with correct response fields
+  // ✅ Bulk apply using fileUpdate. Shopify caps the files array at 250 per
+  // mutation, so chunk larger selections into batches and aggregate results.
   if (actionType === 'applyBulk') {
     const updates = JSON.parse(formData.get('updates'));
+    const FILE_UPDATE_LIMIT = 250;
 
     try {
-      const response = await admin.graphql(
-        `#graphql
-          mutation fileUpdate($files: [FileUpdateInput!]!) {
-            fileUpdate(files: $files) {
-              files {
-                id
-                alt
-              }
-              userErrors {
-                field
-                message
+      for (let i = 0; i < updates.length; i += FILE_UPDATE_LIMIT) {
+        const chunk = updates.slice(i, i + FILE_UPDATE_LIMIT);
+        const response = await admin.graphql(
+          `#graphql
+            mutation fileUpdate($files: [FileUpdateInput!]!) {
+              fileUpdate(files: $files) {
+                files {
+                  id
+                  alt
+                }
+                userErrors {
+                  field
+                  message
+                }
               }
             }
+          `,
+          {
+            variables: {
+              files: chunk.map(({ imageId, altText }) => ({
+                id: imageId,
+                alt: altText
+              }))
+            }
           }
-        `,
-        {
-          variables: {
-            files: updates.map(({ imageId, altText }) => ({
-              id: imageId,
-              alt: altText
-            }))
-          }
+        );
+
+        const result = await response.json();
+
+        if (result.data?.fileUpdate?.userErrors?.length > 0) {
+          return {
+            success: false,
+            error: result.data.fileUpdate.userErrors[0].message
+          };
         }
-      );
-
-      const result = await response.json();
-
-      if (result.data?.fileUpdate?.userErrors?.length > 0) {
-        return {
-          success: false,
-          error: result.data.fileUpdate.userErrors[0].message
-        };
       }
 
       return { success: true, message: `Successfully updated ${updates.length} images` };
@@ -535,9 +540,16 @@ export default function AltTextSuggestions() {
   const generateSuggestions = useCallback(() => {
     if (isGenerating) return;
     setError(null);
-    const pendingImages = images.filter(img => img.status === 'pending' && !img.suggestedAlt);
+    // If the user checked specific images, only generate for those; otherwise
+    // generate for every pending image that doesn't already have a suggestion.
+    const needsSuggestion = (img) => img.status === 'pending' && !img.suggestedAlt;
+    const pendingImages = selectedImages.length > 0
+      ? images.filter(img => selectedImages.includes(img.id) && needsSuggestion(img))
+      : images.filter(needsSuggestion);
     if (pendingImages.length === 0) {
-      setError('All images already have suggestions. Clear existing suggestions to regenerate.');
+      setError(selectedImages.length > 0
+        ? 'Selected images already have suggestions (or are already applied).'
+        : 'All images already have suggestions. Clear existing suggestions to regenerate.');
       return;
     }
     // Split into small batches the client feeds to the server one at a time, so
@@ -550,7 +562,7 @@ export default function AltTextSuggestions() {
     genProviderRef.current = aiProvider;
     setGenProgress({ done: 0, total: pendingImages.length });
     submitNextBatch();
-  }, [images, aiProvider, isGenerating, submitNextBatch]);
+  }, [images, aiProvider, isGenerating, selectedImages, submitNextBatch]);
 
   const handleSelectImage = useCallback((id) => {
     setSelectedImages(prev => prev.includes(id) ? prev.filter(imgId => imgId !== id) : [...prev, id]);
