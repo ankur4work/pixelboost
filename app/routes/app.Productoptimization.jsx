@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLoaderData, useFetcher, useSubmit } from 'react-router';
+import { useLoaderData, useFetcher, useSubmit, useRevalidator } from 'react-router';
 import { authenticate } from '../shopify.server';
 import {
   Page,
@@ -122,14 +122,6 @@ async function getAllProducts(admin) {
     cursor = data.data.products.pageInfo.endCursor;
   }
   return allProducts;
-}
-
-function getImageFormat(url) {
-  const u = url.toLowerCase();
-  if (u.includes('.webp')) return 'webp';
-  if (u.includes('.png')) return 'png';
-  if (u.includes('.gif')) return 'gif';
-  return 'jpg';
 }
 
 // Parse the optimization_summary metafield (totals written by the action).
@@ -260,9 +252,10 @@ export async function loader({ request }) {
 /*  Optimization primitives                                                   */
 /* -------------------------------------------------------------------------- */
 
-// Download + compress one image with Sharp. Retries the download once to ride
-// out transient CDN blips.
-async function optimizeImage(imageUrl, format) {
+// Download + compress one image with Sharp. Always re-encodes to WebP, which
+// reliably beats JPEG/PNG (typically 25-40% smaller at q80). Retries the
+// download once to ride out transient CDN blips.
+async function optimizeImage(imageUrl) {
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -271,13 +264,11 @@ async function optimizeImage(imageUrl, format) {
       const originalBuffer = Buffer.from(await response.arrayBuffer());
       const originalSizeMB = originalBuffer.byteLength / (1024 * 1024);
 
-      const pipeline = sharp(originalBuffer).resize(2048, 2048, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      });
-      const optimizedBuffer = (format === 'webp' || format === 'png')
-        ? await pipeline.webp({ quality: 85, effort: 5 }).toBuffer()
-        : await pipeline.jpeg({ quality: 85, progressive: true }).toBuffer();
+      const optimizedBuffer = await sharp(originalBuffer)
+        .rotate() // honor EXIF orientation before stripping metadata
+        .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80, effort: 4 })
+        .toBuffer();
 
       const optimizedSizeMB = optimizedBuffer.byteLength / (1024 * 1024);
       return {
@@ -507,8 +498,7 @@ async function optimizeBatch(admin, productId) {
   // Process this batch in parallel. Each result is a per-image metafield record.
   const newRecords = (await mapLimit(batch, BATCH_CONCURRENCY, async (image) => {
     try {
-      const format = getImageFormat(image.url);
-      const opt = await optimizeImage(image.url, format);
+      const opt = await optimizeImage(image.url);
 
       // Re-encoding an already-tiny image can grow it — skip so we never
       // degrade the merchant's image. Mark as processed so it isn't retried.
@@ -573,6 +563,22 @@ async function optimizeBatch(admin, productId) {
   const remaining = total - processed;
   const advanced = newRecords.length > 0;
 
+  const optimizedNow = newRecords.filter(r => r.record.status === 'optimized').length;
+  const skippedNow = newRecords.filter(r => r.record.status === 'skipped').length;
+  console.log('[OPT]', JSON.stringify({
+    p: String(productId).split('/').pop(),
+    total,
+    pending: pending.length,
+    batch: batch.length,
+    optimizedNow,
+    skippedNow,
+    failedNow: batch.length - newRecords.length,
+    processed,
+    remaining,
+    origMB: Number(totals.totalOriginalSizeMB.toFixed(3)),
+    savedMB: Number(totals.totalSizeSavedMB.toFixed(3)),
+  }));
+
   return {
     success: true,
     productId,
@@ -623,6 +629,7 @@ export default function ProductOptimization() {
   const { products, filter: initialFilter, sortBy: initialSortBy, stats, error: loadError } = useLoaderData();
   const fetcher = useFetcher();
   const submit = useSubmit();
+  const revalidator = useRevalidator();
 
   const [filter, setFilter] = useState(initialFilter);
   const [sortBy, setSortBy] = useState(initialSortBy);
@@ -644,14 +651,17 @@ export default function ProductOptimization() {
     if (!next) {
       activeRef.current = null;
       setActiveId(null);
-      // Refresh loader data so all cards + headline stats reflect the new state.
-      submit({ filter, sortBy }, { method: 'get' });
+      // Quietly re-run the loader in place (no full-page reload). The live
+      // numbers in liveProgress remain authoritative for display, so stale
+      // read-after-write metafield lag can't flip a finished product back to
+      // "needs optimization".
+      revalidator.revalidate();
       return;
     }
     activeRef.current = next;
     setActiveId(next);
     fetcher.submit({ actionType: 'optimizeProduct', productId: next }, { method: 'post' });
-  }, [fetcher, submit, filter, sortBy]);
+  }, [fetcher, revalidator]);
 
   // Drive the batch loop: each completed batch either continues the same
   // product or advances to the next queued product.
